@@ -21,6 +21,38 @@ TOKEN_COUNTS = {2: 1, 3: 2, 4: 2, 5: 2, 6: 2, 8: 2, 9: 2, 10: 2, 11: 2, 12: 1}
 
 PIP_VALUES = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1}
 
+# Number of hexes of each resource on the standard board (19 total)
+RESOURCE_COUNTS = {"forest": 4, "hills": 3, "fields": 4, "pasture": 4, "mountains": 3, "desert": 1}
+
+# ---------------------------------------------------------------------------
+# Ports
+# ---------------------------------------------------------------------------
+# The standard frame has 9 port slots. Each slot is one coastal edge: two
+# adjacent intersections on the same outer hex. Positions follow the standard
+# spacing around the board's 30 coastal edges (gaps of 3, 3, 4, repeated),
+# listed clockwise from the top. IDs match build_intersection_map's numbering;
+# tests/test_geometry.py verifies every slot is a real coastal edge.
+#
+# SYNC: must match PORT_SLOTS in frontend/src/utils/ports.js (checked by the
+# shared fixture shared/board_geometry.json).
+PORT_SLOTS = [
+    (8, 9),    # top
+    (10, 13),  # upper right
+    (22, 37),  # right
+    (45, 46),  # lower right
+    (50, 53),  # bottom
+    (47, 48),  # lower left
+    (26, 40),  # left, lower
+    (16, 28),  # left, upper
+    (2, 3),    # upper left
+]
+
+PORT_TYPES = {"any", "forest", "hills", "fields", "pasture", "mountains"}
+
+# Port type per slot: 4 generic 3:1 ports + one 2:1 port per resource.
+# Real boards shuffle these, so the user can change them.
+DEFAULT_PORT_TYPES = ["any", "fields", "mountains", "any", "hills", "any", "forest", "pasture", "any"]
+
 # Axial (q, r) coordinates for the 19 hexes in left-to-right, top-to-bottom order
 # This produces the standard Catan 3-4-5-4-3 layout
 HEX_AXIAL_COORDS = [
@@ -165,10 +197,15 @@ def apply_board_state(hexes: List[Hex], board_data: list) -> List[Hex]:
     """
     Merge frontend board JSON (list of {id, resource, number}) into hex objects.
     Returns the updated list.
+
+    Raises ValueError on an unknown hex id. Requests are validated before
+    they get here (schemas.py); this is a defensive second check.
     """
     board_map = {h.id: h for h in hexes}
     for entry in board_data:
-        h = board_map[entry["id"]]
+        h = board_map.get(entry["id"])
+        if h is None:
+            raise ValueError(f"Unknown hex id {entry['id']}")
         h.resource = entry.get("resource")
         h.number = entry.get("number")
     return hexes

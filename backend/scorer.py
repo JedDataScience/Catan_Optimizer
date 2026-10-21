@@ -1,32 +1,42 @@
 """
-scorer.py — Advanced scoring, normalisation, and explanation for Catan settlement
-             recommendations.
+scorer.py — Scoring components, normalisation, and explanations for Catan
+             settlement recommendations.
 
-SCORING MODEL (v2):
+SCORING MODEL (v3):
 
-  weighted_pip = sum over adj hexes of:
+  weighted_pip = sum over adjacent hexes of
       pip_value(hex) * strategic_value(resource) * (1 + scarcity_boost(resource, board))
 
-  synergy_bonus = multiplier for complementary resource pairs (city engine, rush etc.)
+  diversity_quality = distinct resource types, weighted by strategic value
+  synergy_bonus     = multiplier for complementary resource pairs (city engine etc.)
+  follow_up         = value of the best S2 still open after opponents pick
+                      (Monte Carlo, S1 only; see simulation.py)
+  expansion         = weighted pips of the best 2 open spots two roads away
 
-  final_score =
-      pip_weight         * norm_weighted_pip
-    + diversity_weight   * norm_diversity_quality   ← quality-weighted diversity, not flat count
-    + follow_up_weight   * norm_follow_up            ← best S2 still open after opponents (S1 only)
-    + synergy_weight     * norm_synergy_bonus        ← pair complementarity (S2 only)
-    - robber_penalty     * norm_robber_risk           ← from robber.py (static)
+  final_score = sum of SCORE_WEIGHTS[k] * z_score(component k)
+                + a small port bonus (win-path mode only)
 
-All components are normalised to [0, 1] across all candidates before combining.
+Components have different units, so each is converted to a z-score (how many
+standard deviations it sits from the average candidate) before combining.
+Unlike min-max scaling, one extreme candidate doesn't squash all the others.
 
 strategy_weight (0.0 → 1.0) is passed in per-request:
   0.0 = pure raw production (flat pip sum, no resource weighting)
   1.0 = full win-path optimisation (Ore/Wheat prioritised, synergy bonuses)
   Values in between linearly interpolate.
+
+Shared hexes: when both settlements touch the same hex it pays out for each,
+so combined hex lists are concatenated, never deduplicated, when summing.
 """
 
 from __future__ import annotations
-from typing import List, Dict, Optional
+
+import statistics
+from typing import Dict, List, Optional, Set, Tuple
+
 from board import Hex, Intersection, PIP_VALUES
+
+NON_DESERT = ["forest", "hills", "fields", "pasture", "mountains"]
 
 # ---------------------------------------------------------------------------
 # Resource strategic values (win-path mode)
@@ -56,7 +66,7 @@ STRATEGIC_VALUE_RAW: Dict[str, float] = {
 # ---------------------------------------------------------------------------
 # Resource synergy pairs
 # Each tuple: (resource_a, resource_b, win_path_multiplier)
-# Applied when both resources appear in the combined S1+S2 hex set.
+# Applied when both resources appear in the hexes being scored.
 # ---------------------------------------------------------------------------
 
 SYNERGY_PAIRS = [
@@ -73,16 +83,38 @@ SYNERGY_PAIRS = [
 # ---------------------------------------------------------------------------
 
 SCORE_WEIGHTS = {
-    "pip":          0.45,   # weighted pip total (resource + scarcity adjusted)
-    "diversity":    0.20,   # quality-weighted diversity
-    "follow_up":    0.20,   # Monte Carlo: value of best S2 still open (S1 only)
-    "synergy":      0.15,   # resource pair complementarity
+    "pip":       0.40,   # weighted pip total (resource + scarcity adjusted)
+    "diversity": 0.15,   # quality-weighted diversity
+    "follow_up": 0.20,   # Monte Carlo: value of best S2 still open (S1 only)
+    "synergy":   0.15,   # resource pair complementarity
+    "expansion": 0.10,   # best open spots two roads away
 }
 
-# Fallback for deterministic path (no availability data)
-_PIP_W_FALLBACK  = 0.55
-_DIV_W_FALLBACK  = 0.25
-_SYN_W_FALLBACK  = 0.20
+# Port bonus weight at strategy_weight = 1 (ports only matter in win-path mode)
+PORT_WEIGHT = 0.05
+
+# Port types: resource → strategic boost for a settlement on that port
+PORT_STRATEGIC_BOOST = {
+    "mountains": 0.12,   # 2:1 ore port — strong with ore strategy
+    "fields":    0.12,   # 2:1 wheat port
+    "pasture":   0.08,   # 2:1 sheep port
+    "forest":    0.06,   # 2:1 wood port
+    "hills":     0.06,   # 2:1 brick port
+    "any":       0.04,   # 3:1 generic port
+}
+
+# How many expansion targets count (you realistically build toward 1-2)
+EXPANSION_TOP_N = 2
+
+# Explanation thresholds (unweighted pips). A pair of settlements has about
+# twice the pips of a single spot, so it gets its own cutoffs.
+SINGLE_PIPS_HIGH  = 13
+SINGLE_PIPS_SOLID = 10
+PAIR_PIPS_HIGH    = 22
+PAIR_PIPS_SOLID   = 17
+# Top ~15% of spots on random boards (median is ~19), so the sentence is
+# only shown when expansion genuinely stands out
+EXPANSION_PIPS_STRONG = 23
 
 RESOURCE_LABELS = {
     "forest":    "Wood",
@@ -93,8 +125,17 @@ RESOURCE_LABELS = {
 }
 
 # ---------------------------------------------------------------------------
-# Board-level analysis: scarcity weights
+# Board-level analysis: scarcity
 # ---------------------------------------------------------------------------
+
+def _pips_by_resource(hexes: List[Hex]) -> Dict[str, float]:
+    """Total pip value of every hex of each resource type."""
+    pips: Dict[str, float] = {r: 0.0 for r in NON_DESERT}
+    for h in hexes:
+        if h.resource in pips and h.number:
+            pips[h.resource] += PIP_VALUES[h.number]
+    return pips
+
 
 def compute_board_scarcity(hexes: List[Hex]) -> Dict[str, float]:
     """
@@ -102,30 +143,16 @@ def compute_board_scarcity(hexes: List[Hex]) -> Dict[str, float]:
 
     Method:
       1. Sum pip values for every hex of each resource type.
-      2. Normalise to get each resource's "production share" of the board.
-      3. Scarcity = 1.0 - production_share (normalised so rarest = 1.0).
+      2. Each resource's "production share" = its pips / all pips.
+      3. Scarcity = 1 - share / largest share (most common resource = 0).
 
-    Returns a dict like:
-      {"forest": 0.1, "hills": 0.8, "fields": 0.4, "pasture": 0.2, "mountains": 0.9}
     A value near 1.0 means that resource is very scarce (few/low pip hexes).
     """
-    pip_by_resource: Dict[str, float] = {}
-    for h in hexes:
-        if h.resource and h.resource != "desert" and h.number:
-            pip_by_resource[h.resource] = (
-                pip_by_resource.get(h.resource, 0.0) + PIP_VALUES[h.number]
-            )
-
-    non_desert = ["forest", "hills", "fields", "pasture", "mountains"]
-    total = sum(pip_by_resource.get(r, 0.0) for r in non_desert) or 1.0
-
-    # Production share for each resource
-    shares = {r: pip_by_resource.get(r, 0.0) / total for r in non_desert}
-
-    # Scarcity = inverse share, normalised to [0, 1]
+    pips = _pips_by_resource(hexes)
+    total = sum(pips.values()) or 1.0
+    shares = {r: pips[r] / total for r in NON_DESERT}
     max_share = max(shares.values()) or 1.0
-    scarcity = {r: 1.0 - (shares[r] / max_share) for r in non_desert}
-    return scarcity
+    return {r: 1.0 - (shares[r] / max_share) for r in NON_DESERT}
 
 
 def compute_board_analysis(hexes: List[Hex]) -> Dict:
@@ -135,18 +162,8 @@ def compute_board_analysis(hexes: List[Hex]) -> Dict:
       - total pip per resource
       - abundance label per resource
     """
-    pip_by_resource: Dict[str, float] = {}
-    for h in hexes:
-        if h.resource and h.resource != "desert" and h.number:
-            pip_by_resource[h.resource] = (
-                pip_by_resource.get(h.resource, 0.0) + PIP_VALUES[h.number]
-            )
-
-    non_desert = ["forest", "hills", "fields", "pasture", "mountains"]
-    total = sum(pip_by_resource.get(r, 0.0) for r in non_desert) or 1.0
-    shares = {r: pip_by_resource.get(r, 0.0) / total for r in non_desert}
-    max_share = max(shares.values()) or 1.0
-    scarcity = {r: round(1.0 - (shares[r] / max_share), 3) for r in non_desert}
+    pips = _pips_by_resource(hexes)
+    scarcity = {r: round(s, 3) for r, s in compute_board_scarcity(hexes).items()}
 
     def abundance_label(s: float) -> str:
         if s < 0.25:
@@ -160,9 +177,9 @@ def compute_board_analysis(hexes: List[Hex]) -> Dict:
 
     return {
         "scarcity": scarcity,
-        "pip_by_resource": {r: round(pip_by_resource.get(r, 0.0), 1) for r in non_desert},
-        "label": {r: abundance_label(scarcity[r]) for r in non_desert},
-        "total_board_pips": round(total, 1),
+        "pip_by_resource": {r: round(pips[r], 1) for r in NON_DESERT},
+        "label": {r: abundance_label(scarcity[r]) for r in NON_DESERT},
+        "total_board_pips": round(sum(pips.values()), 1),
     }
 
 
@@ -177,7 +194,7 @@ def compute_weighted_pip(
     strategy_weight: float = 1.0,
 ) -> float:
     """
-    Compute a resource-weighted pip score for a set of hex IDs.
+    Compute a resource-weighted pip score for a list of hex IDs.
 
     strategy_weight:
       0.0 → all resources equal (raw production)
@@ -205,6 +222,14 @@ def compute_weighted_pip(
 # Diversity quality score
 # ---------------------------------------------------------------------------
 
+def _resources_present(hex_ids: List[int], hmap: Dict[int, Hex]) -> Set[str]:
+    return {
+        hmap[hid].resource
+        for hid in hex_ids
+        if hid in hmap and hmap[hid].resource and hmap[hid].resource != "desert"
+    }
+
+
 def compute_diversity_quality(
     hex_ids: List[int],
     hmap: Dict[int, Hex],
@@ -214,16 +239,10 @@ def compute_diversity_quality(
     Quality-weighted diversity: counts distinct resource types but weights
     them by strategic value when strategy_weight > 0.
 
-    0.0 mode → flat count of distinct resources (original behavior)
+    0.0 mode → flat count of distinct resources
     1.0 mode → strategic sum (Ore/Wheat types count more than Wood/Brick)
     """
-    resources = {
-        hmap[hid].resource
-        for hid in hex_ids
-        if hid in hmap
-        and hmap[hid].resource
-        and hmap[hid].resource != "desert"
-    }
+    resources = _resources_present(hex_ids, hmap)
     if strategy_weight == 0.0:
         return float(len(resources))
 
@@ -248,22 +267,89 @@ def compute_synergy_bonus(
     if strategy_weight == 0.0:
         return 1.0
 
-    present = {
-        hmap[hid].resource
-        for hid in hex_ids
-        if hid in hmap and hmap[hid].resource and hmap[hid].resource != "desert"
-    }
+    present = _resources_present(hex_ids, hmap)
     bonus = 1.0
     for r_a, r_b, mult in SYNERGY_PAIRS:
         if r_a in present and r_b in present:
             # Blend: at strategy_weight=1 get full mult, at 0 get 1.0
-            effective = 1.0 + strategy_weight * (mult - 1.0)
-            bonus *= effective
+            bonus *= 1.0 + strategy_weight * (mult - 1.0)
     return round(bonus, 4)
 
 
 # ---------------------------------------------------------------------------
-# Legacy helpers (backward compatibility)
+# Ports
+# ---------------------------------------------------------------------------
+
+def compute_port_boost(
+    intersection_id: int,
+    ports: List[Tuple[Tuple[int, int], str]],   # [((a, b), port_type)]
+    strategy_weight: float = 1.0,
+) -> float:
+    """
+    Return a small boost [0.0..0.12] if a settlement here can trade through a
+    port. Only the port's own two intersections can use it. Scales with
+    strategy_weight.
+    """
+    if strategy_weight == 0.0:
+        return 0.0
+
+    best = 0.0
+    for port_ids, port_type in ports:
+        if intersection_id in port_ids:
+            best = max(best, PORT_STRATEGIC_BOOST.get(port_type, 0.0))
+    return round(best * strategy_weight, 4)
+
+
+# ---------------------------------------------------------------------------
+# Expansion potential
+# ---------------------------------------------------------------------------
+
+def compute_expansion(
+    intersection: Intersection,
+    imap: Dict[int, Intersection],
+    hmap: Dict[int, Hex],
+    excluded: Set[int],
+    scarcity: Dict[str, float],
+    strategy_weight: float = 1.0,
+) -> Tuple[float, int]:
+    """
+    How good are the spots you could expand to with two roads?
+
+    Targets are intersections exactly two edges away (neighbours of
+    neighbours, minus the spot itself and its direct neighbours, which the
+    distance rule forbids anyway). Only open targets — not already occupied
+    or blocked — count.
+
+    Returns (sum of weighted pips of the best EXPANSION_TOP_N targets,
+             their unweighted pip total for display).
+    """
+    neighbours = set(intersection.adjacent_ids)
+    two_away = {
+        far
+        for n in neighbours
+        for far in imap[n].adjacent_ids
+    } - neighbours - {intersection.id}
+
+    scored = sorted(
+        (
+            (
+                compute_weighted_pip(imap[t].hex_ids, hmap, scarcity, strategy_weight),
+                compute_pip_total(imap[t].hex_ids, hmap),
+            )
+            for t in two_away
+            if t not in excluded
+        ),
+        reverse=True,
+    )[:EXPANSION_TOP_N]
+
+    return (
+        round(sum(w for w, _ in scored), 3),
+        sum(p for _, p in scored),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Display helpers
 # ---------------------------------------------------------------------------
 
 def compute_pip_total(hex_ids: List[int], hmap: Dict[int, Hex]) -> int:
@@ -277,17 +363,13 @@ def compute_pip_total(hex_ids: List[int], hmap: Dict[int, Hex]) -> int:
 
 def compute_diversity(hex_ids: List[int], hmap: Dict[int, Hex]) -> int:
     """Flat diversity count — used for display/UI."""
-    resources = {
-        hmap[hid].resource
-        for hid in hex_ids
-        if hid in hmap and hmap[hid].resource and hmap[hid].resource != "desert"
-    }
-    return len(resources)
+    return len(_resources_present(hex_ids, hmap))
 
 
 def compute_expected_resources(
     hex_ids: List[int], hmap: Dict[int, Hex]
 ) -> Dict[str, float]:
+    """Expected cards of each resource per dice roll (pips / 36 per hex)."""
     out: Dict[str, float] = {}
     for hid in hex_ids:
         h = hmap.get(hid)
@@ -307,13 +389,7 @@ def compute_combined_expected_resources(
     Intentionally NOT deduplicated — if both settlements touch the same hex,
     that hex produces for both (correct Catan rule).
     """
-    out: Dict[str, float] = {}
-    for hid in s1_hex_ids + s2_hex_ids:
-        h = hmap.get(hid)
-        if h and h.number and h.resource and h.resource != "desert":
-            prob = PIP_VALUES[h.number] / 36.0
-            out[h.resource] = round(out.get(h.resource, 0.0) + prob, 4)
-    return out
+    return compute_expected_resources(s1_hex_ids + s2_hex_ids, hmap)
 
 
 def compute_combined_stats(
@@ -335,88 +411,26 @@ def compute_combined_stats(
 # ---------------------------------------------------------------------------
 
 def normalise(values: List[float]) -> List[float]:
+    """Min-max scale to [0, 1]. Used for the 0-100 display score only."""
     mn, mx = min(values), max(values)
     if mx == mn:
         return [0.5] * len(values)
     return [(v - mn) / (mx - mn) for v in values]
 
 
-# ---------------------------------------------------------------------------
-# Deterministic fallback scoring (no availability data)
-# ---------------------------------------------------------------------------
-
-def score_candidates(
-    candidates: List[Intersection],
-    hmap: Dict[int, Hex],
-    s1_hex_ids: Optional[List[int]] = None,
-    scarcity: Optional[Dict[str, float]] = None,
-    strategy_weight: float = 1.0,
-) -> List[dict]:
-    if scarcity is None:
-        scarcity = {}
-
-    rows = []
-    for c in candidates:
-        if s1_hex_ids:
-            # Not deduplicated: a hex touched by both settlements pays out twice
-            combined_ids = s1_hex_ids + c.hex_ids
-            wpip   = compute_weighted_pip(combined_ids, hmap, scarcity, strategy_weight)
-            dq     = compute_diversity_quality(combined_ids, hmap, strategy_weight)
-            syn    = compute_synergy_bonus(combined_ids, hmap, strategy_weight)
-            exp_res = compute_combined_expected_resources(s1_hex_ids, c.hex_ids, hmap)
-            pip_display = compute_pip_total(combined_ids, hmap)
-            div_display = compute_diversity(combined_ids, hmap)
-        else:
-            wpip    = compute_weighted_pip(c.hex_ids, hmap, scarcity, strategy_weight)
-            dq      = compute_diversity_quality(c.hex_ids, hmap, strategy_weight)
-            syn     = compute_synergy_bonus(c.hex_ids, hmap, strategy_weight)
-            exp_res = compute_expected_resources(c.hex_ids, hmap)
-            pip_display = compute_pip_total(c.hex_ids, hmap)
-            div_display = compute_diversity(c.hex_ids, hmap)
-
-        rows.append({
-            "intersection_id":    c.id,
-            "weighted_pip":       wpip,
-            "diversity_quality":  dq,
-            "synergy_bonus":      syn,
-            "pip_total":          pip_display,
-            "diversity":          div_display,
-            "expected_resources": exp_res,
-            "_raw_score":         None,
-        })
-
-    if not rows:
-        return rows
-
-    norm_wpip = normalise([r["weighted_pip"]      for r in rows])
-    norm_dq   = normalise([r["diversity_quality"] for r in rows])
-    norm_syn  = normalise([r["synergy_bonus"]     for r in rows])
-
-    for i, r in enumerate(rows):
-        r["_raw_score"] = (
-            _PIP_W_FALLBACK * norm_wpip[i]
-            + _DIV_W_FALLBACK * norm_dq[i]
-            + _SYN_W_FALLBACK * norm_syn[i]
-        )
-
-    return rows
-
-
-def rank_candidates(scored_rows: List[dict], top_n: int = 5) -> List[dict]:
-    sorted_rows = sorted(scored_rows, key=lambda r: r["_raw_score"], reverse=True)
-    for rank_idx, r in enumerate(sorted_rows):
-        r["rank"]  = rank_idx + 1
-        r["score"] = round(r["_raw_score"], 4)
-        r["explanation"] = explain(
-            pip_total=r["pip_total"],
-            diversity=r["diversity"],
-            expected_resources=r["expected_resources"],
-            weighted_pip=r.get("weighted_pip", 0),
-            synergy_bonus=r.get("synergy_bonus", 1.0),
-            strategy_weight=1.0,
-        )
-        del r["_raw_score"]
-    return sorted_rows[:top_n]
+def standardise(values: List[float]) -> List[float]:
+    """
+    Z-scores: (value - mean) / standard deviation. Used to combine score
+    components with different units. All-equal values → all 0 (the
+    component can't separate candidates, so it shouldn't move the ranking).
+    """
+    if len(values) < 2:
+        return [0.0] * len(values)
+    mean = statistics.fmean(values)
+    sd   = statistics.pstdev(values)
+    if sd == 0:
+        return [0.0] * len(values)
+    return [(v - mean) / sd for v in values]
 
 
 # ---------------------------------------------------------------------------
@@ -429,49 +443,55 @@ def explain(
     expected_resources: Dict[str, float],
     weighted_pip: float = 0.0,
     synergy_bonus: float = 1.0,
-    robber_discount: float = 0.0,
     strategy_weight: float = 1.0,
     scarcity: Optional[Dict[str, float]] = None,
+    is_pair: bool = False,
+    robber_loss: Optional[float] = None,
+    expansion_pips: Optional[int] = None,
 ) -> str:
     """
-    Generate a 2-3 sentence context-aware explanation for a recommended intersection.
-    Considers strategy mode, resource scarcity, synergy pairs, and robber risk.
+    Generate a short context-aware explanation for a recommendation.
+
+    is_pair:        pip_total covers both settlements (S2 / final analysis),
+                    so the pair thresholds apply.
+    robber_loss:    long-run share of production the robber blocks (only
+                    known once the draft is complete).
+    expansion_pips: pips of the best open spots two roads away.
     """
     parts = []
+    high, solid = (PAIR_PIPS_HIGH, PAIR_PIPS_SOLID) if is_pair else (SINGLE_PIPS_HIGH, SINGLE_PIPS_SOLID)
 
     # ── Sentence 1: production strength + best resources ────────────────────
     top = sorted(expected_resources.items(), key=lambda x: -x[1])
-    top_names = [RESOURCE_LABELS.get(r, r) for r, _ in top[:2]]
+    top_names = " and ".join(RESOURCE_LABELS.get(r, r) for r, _ in top[:2]) or "no resources"
 
     if strategy_weight > 0.5 and weighted_pip > 0:
-        # Win-path mode: note strategic value
-        if pip_total >= 13:
-            base = f"High-probability spot with strong {' and '.join(top_names)} output"
-        elif pip_total >= 10:
-            base = f"Reliable production of {' and '.join(top_names)}"
+        # Win-path mode: describe strategic strength
+        if pip_total >= high:
+            base = f"High-probability spot with strong {top_names} output"
+        elif pip_total >= solid:
+            base = f"Reliable production of {top_names}"
         else:
-            base = f"Moderate production, primarily {' and '.join(top_names)}"
+            base = f"Moderate production, primarily {top_names}"
     else:
         # Raw mode: just the numbers
-        if pip_total >= 13:
-            base = f"Excellent pip coverage ({pip_total} pips) producing {' and '.join(top_names)}"
-        elif pip_total >= 10:
-            base = f"Solid pip total ({pip_total}) with {' and '.join(top_names)} production"
+        if pip_total >= high:
+            base = f"Excellent pip coverage ({pip_total} pips) producing {top_names}"
+        elif pip_total >= solid:
+            base = f"Solid pip total ({pip_total}) with {top_names} production"
         else:
-            base = f"Lower pip total ({pip_total}) — relies on {' and '.join(top_names)}"
+            base = f"Lower pip total ({pip_total}) — relies on {top_names}"
 
     # Scarcity callout
     if scarcity and strategy_weight > 0.3 and top:
         top_res = top[0][0]
-        s = scarcity.get(top_res, 0.0)
-        if s > 0.65:
+        if scarcity.get(top_res, 0.0) > 0.65:
             base += f" — {RESOURCE_LABELS.get(top_res, top_res)} is scarce on this board, adding significant value"
 
     parts.append(base + ".")
 
     # ── Sentence 2: synergy or diversity ────────────────────────────────────
     if strategy_weight > 0.5 and synergy_bonus > 1.15:
-        # Strong synergy detected
         present = set(expected_resources.keys())
         if "mountains" in present and "fields" in present:
             parts.append("Ore and Wheat together enable the city engine — the strongest late-game strategy.")
@@ -482,22 +502,27 @@ def explain(
         elif "forest" in present and "hills" in present:
             parts.append("Wood and Brick fuel early road and settlement expansion.")
         else:
-            parts.append("Strong resource complementarity between your two settlements.")
+            parts.append("Strong resource complementarity.")
     elif diversity >= 3:
-        parts.append("Covers 3 distinct resource types — good flexibility to adapt your strategy.")
+        parts.append(f"Covers {diversity} distinct resource types — good flexibility to adapt your strategy.")
     elif diversity == 2:
-        parts.append("Covers 2 resource types; complement with your second settlement.")
+        parts.append("Covers 2 resource types; complement with your other settlement.")
     else:
-        parts.append("Specialised in a single resource — pair with a very different second spot.")
+        parts.append("Specialised in a single resource — pair with a very different spot.")
 
-    # ── Sentence 3: robber risk (only if elevated) ───────────────────────────
-    if robber_discount > 0.15:
-        pct = round(robber_discount * 100)
-        parts.append(
-            f"Note: robber risk is elevated (~{pct}% expected output loss) "
-            "due to high-value adjacent hexes — opponents will target these."
-        )
-    elif robber_discount > 0.08:
-        parts.append("Moderate robber exposure — keep an eye on the high-pip hexes nearby.")
+    # ── Sentence 3: expansion (only if strong) ──────────────────────────────
+    if expansion_pips is not None and expansion_pips >= EXPANSION_PIPS_STRONG:
+        parts.append(f"Good room to grow: strong open spots ({expansion_pips} pips) are two roads away.")
+
+    # ── Sentence 4: robber risk (only if elevated) ──────────────────────────
+    if robber_loss is not None:
+        pct = round(robber_loss * 100)
+        if robber_loss > 0.15:
+            parts.append(
+                f"Robber risk is elevated: in the long run it blocks about {pct}% of your "
+                "production, because your best hexes are also opponents' best targets."
+            )
+        elif robber_loss > 0.08:
+            parts.append(f"Moderate robber exposure (about {pct}% of production blocked in the long run).")
 
     return " ".join(parts)

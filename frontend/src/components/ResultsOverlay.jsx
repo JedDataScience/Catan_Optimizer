@@ -77,15 +77,11 @@ export default function ResultsOverlay({
   for (const r of recommendations) rankMap[r.intersection_id] = r;
 
   const placementMap = {};
-  let userS1id = null, userS2id = null;
-  let userPlacedCount = 0;
+  // The user's first placement is S1; any other user placement is S2
+  let userS1id = null;
   for (const p of placements) {
     placementMap[p.intersection_id] = p.player;
-    if (p.player === userPosition) {
-      userPlacedCount++;
-      if (userPlacedCount === 1) userS1id = p.intersection_id;
-      else if (userPlacedCount === 2) userS2id = p.intersection_id;
-    }
+    if (p.player === userPosition && userS1id === null) userS1id = p.intersection_id;
   }
 
   return (

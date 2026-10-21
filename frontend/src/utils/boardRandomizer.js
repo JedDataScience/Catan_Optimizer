@@ -43,7 +43,7 @@ const MAX_ATTEMPTS = 100;
  * Return a new shuffled copy of arr using the Fisher-Yates algorithm.
  * NOTE: Do NOT use Array.sort(() => Math.random() - 0.5) — it is biased.
  */
-function shuffle(arr) {
+export function shuffle(arr) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));

@@ -18,6 +18,9 @@ export const ALL_RESOURCES = ['forest', 'hills', 'fields', 'pasture', 'mountains
 export const PLAYER_COLORS = ['#f59e0b', '#ef4444', '#22c55e', '#6366f1'];
 export const PLAYER_LABELS = ['1st', '2nd', '3rd', '4th'];
 
+// Hexes of each resource on the standard board (19 total). Matches RESOURCE_COUNTS in backend/board.py.
+export const RESOURCE_COUNTS = { forest: 4, hills: 3, fields: 4, pasture: 4, mountains: 3, desert: 1 };
+
 export const TOKEN_COUNTS = { 2: 1, 3: 2, 4: 2, 5: 2, 6: 2, 8: 2, 9: 2, 10: 2, 11: 2, 12: 1 };
 export const ALL_NUMBERS  = [2, 3, 4, 5, 6, 8, 9, 10, 11, 12];
 export const HOT_NUMBERS  = new Set([6, 8]);

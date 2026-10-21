@@ -40,7 +40,8 @@ export default function AnalysisPanel({ analysis, onRestart }) {
     combined_pip_total,
     diversity,
     expected_resources,
-    robber_discount,
+    cards_per_roll,
+    robber_expected_loss,
     explanation,
     board_analysis,
     s1,
@@ -55,13 +56,16 @@ export default function AnalysisPanel({ analysis, onRestart }) {
     ? chartData.reduce((s, d) => s + d.value, 0) / chartData.length
     : 0;
 
-  const robberPct = Math.round(robber_discount * 100);
-  const robberColor = robberPct > 30 ? 'var(--red)' : robberPct > 15 ? 'var(--orange)' : 'var(--green)';
+  // Same cutoffs as the backend explanation (scorer.explain): >15% elevated, >8% moderate
+  const robberPct = Math.round(robber_expected_loss * 100);
+  const robberColor = robberPct > 15 ? 'var(--red)' : robberPct > 8 ? 'var(--orange)' : 'var(--green)';
 
   return (
     <div>
       <div className="section-heading" style={{ marginBottom: 4 }}>Settlement Analysis</div>
-      <div className="section-sub">Full breakdown of both your starting placements.</div>
+      <div className="section-sub">
+        Full breakdown of both your starting placements: {cards_per_roll.toFixed(2)} resource cards per roll.
+      </div>
 
       {/* Key stats */}
       <div className="analysis-stat-grid">
@@ -73,7 +77,15 @@ export default function AnalysisPanel({ analysis, onRestart }) {
           <div className="stat-value" style={{ color: 'var(--green)' }}>{diversity}</div>
           <div className="stat-label">Resources</div>
         </div>
-        <div className="stat-card" style={{ '--stat-color': robberColor }}>
+        <div
+          className="stat-card"
+          style={{ '--stat-color': robberColor }}
+          title={
+            'Long-run share of your production the robber blocks. On each 7, any player is ' +
+            'equally likely to roll; they move the robber to the hex that hurts the others most, ' +
+            'never their own.'
+          }
+        >
           <div className="stat-value" style={{ color: robberColor }}>{robberPct}%</div>
           <div className="stat-label">Robber Risk</div>
         </div>

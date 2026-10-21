@@ -3,16 +3,17 @@
  *
  * Props:
  *   hexes          — array of 19 hex objects { id, cx, cy, resource, number }
+ *   ports          — port type per slot (see utils/ports.js)
  *   onHexUpdate    — (hexId, { resource, number }) => void
- *   onClearBoard   — () => void
- *   onRandomise    — () => void
+ *   onPortChange   — (slotIdx, portType) => void
  *   children       — optional overlay content (ResultsOverlay, settlements)
- *   interactive    — bool, if false hexes are not clickable
+ *   interactive    — bool, if false hexes and ports are not clickable
  */
 
 import { useState, useRef } from 'react';
 import { hexPoints, SVG_WIDTH, SVG_HEIGHT } from '../utils/hexGeometry';
 import { RESOURCES, RESOURCE_MAP, TOKEN_COUNTS, ALL_NUMBERS, HOT_NUMBERS, PIPS } from '../utils/constants';
+import { PortMarkers, PortConfigPopover } from './PortMarkers';
 
 // ── Pip dots ─────────────────────────────────────────────────────────────────
 
@@ -134,16 +135,25 @@ const HEX_FILLS = {
 
 // ── Main BoardSetup Component ────────────────────────────────────────────────
 
-export default function BoardSetup({ hexes, onHexUpdate, onClearBoard, onRandomise, children, interactive = true }) {
-  const [selectedHex, setSelectedHex] = useState(null);
-  const [popoverPos, setPopoverPos]   = useState({ x: 0, y: 0 });
+export default function BoardSetup({ hexes, ports, onHexUpdate, onPortChange, children, interactive = true }) {
+  const [selectedHex, setSelectedHex]   = useState(null);
+  const [selectedPort, setSelectedPort] = useState(null);
+  const [popoverPos, setPopoverPos]     = useState({ x: 0, y: 0 });
   const svgRef = useRef(null);
 
   function handleHexClick(e, hex) {
     if (!interactive) return;
     const rect = svgRef.current.getBoundingClientRect();
     setPopoverPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    setSelectedPort(null);
     setSelectedHex(hex);
+  }
+
+  // Anchored at the badge itself (SVG coords), so it works for keyboard too
+  function handlePortSelect(slotIdx, markerPos) {
+    setPopoverPos(markerPos);
+    setSelectedHex(null);
+    setSelectedPort(slotIdx);
   }
 
   const selectedId = selectedHex?.id ?? null;
@@ -270,6 +280,9 @@ export default function BoardSetup({ hexes, onHexUpdate, onClearBoard, onRandomi
             );
           })}
 
+          {/* Ports around the coast */}
+          <PortMarkers ports={ports} interactive={interactive} onSelect={handlePortSelect} />
+
           {/* Overlay children (intersections, settlements, etc.) */}
           {children}
         </svg>
@@ -281,6 +294,16 @@ export default function BoardSetup({ hexes, onHexUpdate, onClearBoard, onRandomi
           hexes={hexes}
           onUpdate={(id, patch) => onHexUpdate(id, patch)}
           onClose={() => setSelectedHex(null)}
+          anchorPos={popoverPos}
+        />
+      )}
+
+      {selectedPort !== null && (
+        <PortConfigPopover
+          slotIdx={selectedPort}
+          ports={ports}
+          onChange={onPortChange}
+          onClose={() => setSelectedPort(null)}
           anchorPos={popoverPos}
         />
       )}

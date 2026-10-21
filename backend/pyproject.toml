@@ -1,0 +1,19 @@
+[project]
+name = "catan-optimizer"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.157.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16.0",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+# Backend modules (board.py, scorer.py, ...) live at the top level of backend/
+pythonpath = ["."]
+testpaths = ["tests"]

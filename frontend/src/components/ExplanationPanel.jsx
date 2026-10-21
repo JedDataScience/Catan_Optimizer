@@ -15,7 +15,8 @@ function ResourceBars({ expectedResources }) {
       {ALL_RESOURCES.map((res) => {
         const info   = RESOURCE_MAP[res];
         const val    = expectedResources?.[res] || 0;
-        const height = Math.max(Math.round((val / MAX_EXPECTED) * 28), val > 0 ? 3 : 0);
+        // Capped: a pair of settlements can produce more than one 6/8 hex's worth
+        const height = Math.min(28, Math.max(Math.round((val / MAX_EXPECTED) * 28), val > 0 ? 3 : 0));
         return (
           <div key={res} className="resource-bar-wrap">
             <div
@@ -45,8 +46,7 @@ export default function ExplanationPanel({ recommendations = [], onSelectNode, h
         const color       = RANK_COLORS[rec.rank - 1] || RANK_COLORS[4];
         const isHighlight = rec.intersection_id === highlightedId;
         // Expected pips of the best 2nd settlement still open (only sent for S1)
-        const followUp    = rec.follow_up_pips != null ? rec.follow_up_pips : null;
-        const scoreDisp   = (rec.score * 100).toFixed(0);
+        const followUp    = rec.follow_up_pips ?? null;
 
         return (
           <div
@@ -66,21 +66,35 @@ export default function ExplanationPanel({ recommendations = [], onSelectNode, h
               </div>
 
               <div className="rank-meta">
+                <span className="rank-stat" title="Expected resource cards per dice roll">
+                  <strong>{rec.cards_per_roll.toFixed(2)}</strong>&nbsp;cards/roll
+                </span>
                 <span className="rank-stat">
                   <strong>{rec.pip_total}</strong>&nbsp;pips
                 </span>
                 <span className="rank-stat">
                   <strong>{rec.diversity}</strong>&nbsp;types
                 </span>
-                {followUp != null && (
-                  <span className="rank-stat" title="Expected pips of the best 2nd settlement still open on your next turn">
-                    2nd spot&nbsp;<strong>{followUp}</strong>&nbsp;pips
-                  </span>
-                )}
               </div>
 
-              <span className="rank-score" style={{ color }}>
-                {scoreDisp}
+              <span
+                className="rank-score"
+                style={{ color }}
+                title="Score vs. the other open spots on this board (100 = best, 0 = worst)"
+              >
+                {rec.score}/100
+              </span>
+            </div>
+
+            {/* Secondary stats */}
+            <div className="rank-meta" style={{ marginBottom: 7 }}>
+              {followUp != null && (
+                <span className="rank-stat" title="Expected pips of the best 2nd settlement still open on your next turn">
+                  2nd spot&nbsp;<strong>{followUp}</strong>&nbsp;pips
+                </span>
+              )}
+              <span className="rank-stat" title="Pips of the best 2 open spots two roads away">
+                expansion&nbsp;<strong>{rec.expansion_pips}</strong>&nbsp;pips
               </span>
             </div>
 
