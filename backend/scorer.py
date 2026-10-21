@@ -32,6 +32,7 @@ so combined hex lists are concatenated, never deduplicated, when summing.
 from __future__ import annotations
 
 import statistics
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
 from board import Hex, Intersection, PIP_VALUES
@@ -41,15 +42,16 @@ NON_DESERT = ["forest", "hills", "fields", "pasture", "mountains"]
 # ---------------------------------------------------------------------------
 # Resource strategic values (win-path mode)
 # ---------------------------------------------------------------------------
-# Based on competitive analysis: Ore/Wheat are critical for cities and dev cards,
-# Sheep enables dev cards, Wood/Brick are early-game only.
+# Calibrated from 60,000 simulated games (backend/calibration/REPORT.md):
+# the value of one pip of each resource relative to the average resource.
+# (Previous hand-picked values in brackets.)
 
 STRATEGIC_VALUE: Dict[str, float] = {
-    "fields":    1.35,   # Wheat  — most valuable, needed for almost everything
-    "mountains": 1.25,   # Ore    — essential for cities and dev cards
-    "pasture":   1.10,   # Sheep  — strong with ore/wheat (dev cards)
-    "forest":    0.90,   # Wood   — early game (roads/settlements)
-    "hills":     0.90,   # Brick  — early game (roads/settlements)
+    "mountains": 1.21,   # Ore    — cities and dev cards            [1.25]
+    "fields":    1.16,   # Wheat  — needed for almost everything    [1.35]
+    "hills":     0.97,   # Brick  — roads and settlements           [0.90]
+    "forest":    0.91,   # Wood   — roads and settlements           [0.90]
+    "pasture":   0.75,   # Sheep  — rarely the bottleneck           [1.10]
     "desert":    0.00,
 }
 
@@ -69,13 +71,15 @@ STRATEGIC_VALUE_RAW: Dict[str, float] = {
 # Applied when both resources appear in the hexes being scored.
 # ---------------------------------------------------------------------------
 
+# Calibrated (REPORT.md); previous values in brackets. Ore + Sheep showed no
+# clear effect in the simulations, so it gets no bonus.
 SYNERGY_PAIRS = [
-    ("mountains", "fields",  1.40),   # Ore + Wheat  = city engine (dominant)
-    ("mountains", "pasture", 1.20),   # Ore + Sheep  = dev cards
-    ("fields",    "pasture", 1.15),   # Wheat + Sheep = dev cards
-    ("forest",    "hills",   1.10),   # Wood + Brick  = early roads/settlements
-    ("forest",    "fields",  1.05),   # Wood + Wheat  = settlements
-    ("hills",     "fields",  1.05),   # Brick + Wheat = settlements
+    ("mountains", "fields",  1.14),   # Ore + Wheat   = city engine            [1.40]
+    ("mountains", "pasture", 1.00),   # Ore + Sheep   = no clear effect        [1.20]
+    ("fields",    "pasture", 1.05),   # Wheat + Sheep = dev cards              [1.15]
+    ("forest",    "hills",   1.08),   # Wood + Brick  = roads/settlements      [1.10]
+    ("forest",    "fields",  1.04),   # Wood + Wheat  = settlements            [1.05]
+    ("hills",     "fields",  1.04),   # Brick + Wheat = settlements            [1.05]
 ]
 
 # Explanation sentence per pair (see explain)
@@ -96,16 +100,23 @@ SYNERGY_FULL_PIPS = 5
 # Canonical scoring weights — single source of truth
 # ---------------------------------------------------------------------------
 
+# Calibrated (REPORT.md); previous values in brackets. Weights are relative:
+# recommend() rescales whichever ones apply so they sum to 1. Follow-up can't
+# be fitted from final positions, so 0.30 is the best of the head-to-head
+# grid (0.1 / 0.2 / 0.3).
 SCORE_WEIGHTS = {
-    "pip":       0.40,   # weighted pip total (resource + scarcity adjusted)
-    "diversity": 0.15,   # quality-weighted diversity
-    "follow_up": 0.20,   # Monte Carlo: value of best S2 still open (S1 only)
-    "synergy":   0.15,   # resource pair complementarity
-    "expansion": 0.10,   # best open spots two roads away
+    "pip":       0.428,  # weighted pip total (resource + scarcity adjusted)  [0.40]
+    "diversity": 0.110,  # quality-weighted diversity                          [0.15]
+    "follow_up": 0.300,  # Monte Carlo: value of best S2 still open (S1 only)  [0.20]
+    "synergy":   0.074,  # resource pair complementarity                       [0.15]
+    "expansion": 0.188,  # best open spots two roads away                      [0.10]
 }
 
 # Port bonus weight at strategy_weight = 1 (ports only matter in win-path mode)
-PORT_WEIGHT = 0.05
+PORT_WEIGHT = 0.09  # calibrated [0.05]
+
+# A fully scarce resource is worth up to this much extra (calibrated [0.60])
+SCARCITY_BOOST = 0.52
 
 # Port types: resource → strategic boost for a settlement on that port
 PORT_STRATEGIC_BOOST = {
@@ -129,6 +140,9 @@ PAIR_PIPS_SOLID   = 17
 # Top ~15% of spots on random boards (median is ~19), so the sentence is
 # only shown when expansion genuinely stands out
 EXPANSION_PIPS_STRONG = 23
+# Mention a resource pair only when its bonus is at least this big. Scaled to
+# the calibrated multipliers (the strongest pair, Ore + Wheat, is 1.14).
+SYNERGY_SENTENCE_MIN_BONUS = 1.05
 
 RESOURCE_LABELS = {
     "forest":    "Wood",
@@ -137,6 +151,28 @@ RESOURCE_LABELS = {
     "pasture":   "Sheep",
     "mountains": "Ore",
 }
+
+
+# ---------------------------------------------------------------------------
+# Tunable scoring values, bundled so they can be swapped as a unit
+# ---------------------------------------------------------------------------
+# The app always uses DEFAULT_PARAMS (built from the constants above). The
+# calibration tooling (backend/calibration/) passes alternative ScoringParams
+# to compare candidate values head-to-head without editing module constants.
+
+@dataclass(frozen=True)
+class ScoringParams:
+    strategic_value:   Dict[str, float] = field(default_factory=lambda: dict(STRATEGIC_VALUE))
+    score_weights:     Dict[str, float] = field(default_factory=lambda: dict(SCORE_WEIGHTS))
+    synergy_pairs:     Tuple[Tuple[str, str, float], ...] = tuple(SYNERGY_PAIRS)
+    synergy_full_pips: float = SYNERGY_FULL_PIPS
+    port_weight:       float = PORT_WEIGHT
+    port_boost:        Dict[str, float] = field(default_factory=lambda: dict(PORT_STRATEGIC_BOOST))
+    expansion_top_n:   int = EXPANSION_TOP_N
+    scarcity_boost:    float = SCARCITY_BOOST
+
+
+DEFAULT_PARAMS = ScoringParams()
 
 # ---------------------------------------------------------------------------
 # Board-level analysis: scarcity
@@ -206,6 +242,7 @@ def compute_weighted_pip(
     hmap: Dict[int, Hex],
     scarcity: Dict[str, float],
     strategy_weight: float = 1.0,
+    params: ScoringParams = DEFAULT_PARAMS,
 ) -> float:
     """
     Compute a resource-weighted pip score for a list of hex IDs.
@@ -221,13 +258,13 @@ def compute_weighted_pip(
         if not h or not h.number or not h.resource or h.resource == "desert":
             continue
         pip = PIP_VALUES[h.number]
-        strat = STRATEGIC_VALUE.get(h.resource, 1.0)
+        strat = params.strategic_value.get(h.resource, 1.0)
         raw   = STRATEGIC_VALUE_RAW.get(h.resource, 1.0)
         # Linearly interpolate between raw and strategic
         eff_strat = raw + strategy_weight * (strat - raw)
-        # Scarcity boost: scarce resource gets up to +60% extra
+        # Scarcity boost: a scarce resource gets up to params.scarcity_boost extra
         scar  = scarcity.get(h.resource, 0.0)
-        eff_strat *= (1.0 + 0.6 * strategy_weight * scar)
+        eff_strat *= (1.0 + params.scarcity_boost * strategy_weight * scar)
         total += pip * eff_strat
     return round(total, 3)
 
@@ -248,6 +285,7 @@ def compute_diversity_quality(
     hex_ids: List[int],
     hmap: Dict[int, Hex],
     strategy_weight: float = 1.0,
+    params: ScoringParams = DEFAULT_PARAMS,
 ) -> float:
     """
     Quality-weighted diversity: counts distinct resource types but weights
@@ -260,7 +298,7 @@ def compute_diversity_quality(
     if strategy_weight == 0.0:
         return float(len(resources))
 
-    strat_sum = sum(STRATEGIC_VALUE.get(r, 1.0) for r in resources)
+    strat_sum = sum(params.strategic_value.get(r, 1.0) for r in resources)
     raw_sum   = float(len(resources))
     return raw_sum + strategy_weight * (strat_sum - raw_sum)
 
@@ -279,21 +317,22 @@ def _pips_per_resource(hex_ids: List[int], hmap: Dict[int, Hex]) -> Dict[str, in
     return pips
 
 
-def synergy_strength(pips_a: float, pips_b: float) -> float:
+def synergy_strength(pips_a: float, pips_b: float, full_pips: float = SYNERGY_FULL_PIPS) -> float:
     """
     How fully a resource pair "works" [0..1]: limited by the weaker side.
 
     A pair needs real production of both resources: a single 2 or 12 (1 pip)
     of ore doesn't make an ore-and-wheat city engine. Strength grows linearly
-    with the weaker side's pips and is full at SYNERGY_FULL_PIPS (one 6 or 8).
+    with the weaker side's pips and is full at `full_pips` (default: one 6 or 8).
     """
-    return min(min(pips_a, pips_b) / SYNERGY_FULL_PIPS, 1.0)
+    return min(min(pips_a, pips_b) / full_pips, 1.0)
 
 
 def compute_synergy_bonus(
     hex_ids: List[int],
     hmap: Dict[int, Hex],
     strategy_weight: float = 1.0,
+    params: ScoringParams = DEFAULT_PARAMS,
 ) -> float:
     """
     Compute a synergy multiplier (≥ 1.0) based on resource pair complementarity,
@@ -305,24 +344,29 @@ def compute_synergy_bonus(
 
     pips = _pips_per_resource(hex_ids, hmap)
     bonus = 1.0
-    for r_a, r_b, mult in SYNERGY_PAIRS:
+    for r_a, r_b, mult in params.synergy_pairs:
         if r_a in pips and r_b in pips:
-            strength = synergy_strength(pips[r_a], pips[r_b])
+            strength = synergy_strength(pips[r_a], pips[r_b], params.synergy_full_pips)
             # Blend: full multiplier at strategy_weight=1 and full strength
             bonus *= 1.0 + strategy_weight * strength * (mult - 1.0)
     return round(bonus, 4)
 
 
-def strongest_synergy(expected_resources: Dict[str, float]) -> Optional[Tuple[str, str]]:
+def strongest_synergy(
+    expected_resources: Dict[str, float],
+    params: ScoringParams = DEFAULT_PARAMS,
+) -> Optional[Tuple[str, str]]:
     """
     The pair contributing the most bonus, given expected cards per roll per
     resource (pips = cards × 36). None if no pair reaches half strength, so
     explanations only mention pairs that genuinely work.
     """
     best, best_gain = None, 0.0
-    for r_a, r_b, mult in SYNERGY_PAIRS:
+    for r_a, r_b, mult in params.synergy_pairs:
         if r_a in expected_resources and r_b in expected_resources:
-            strength = synergy_strength(expected_resources[r_a] * 36, expected_resources[r_b] * 36)
+            strength = synergy_strength(
+                expected_resources[r_a] * 36, expected_resources[r_b] * 36, params.synergy_full_pips,
+            )
             gain = strength * (mult - 1.0)
             if strength >= 0.5 and gain > best_gain:
                 best, best_gain = (r_a, r_b), gain
@@ -337,6 +381,7 @@ def compute_port_boost(
     intersection_id: int,
     ports: List[Tuple[Tuple[int, int], str]],   # [((a, b), port_type)]
     strategy_weight: float = 1.0,
+    params: ScoringParams = DEFAULT_PARAMS,
 ) -> float:
     """
     Return a small boost [0.0..0.12] if a settlement here can trade through a
@@ -349,7 +394,7 @@ def compute_port_boost(
     best = 0.0
     for port_ids, port_type in ports:
         if intersection_id in port_ids:
-            best = max(best, PORT_STRATEGIC_BOOST.get(port_type, 0.0))
+            best = max(best, params.port_boost.get(port_type, 0.0))
     return round(best * strategy_weight, 4)
 
 
@@ -364,6 +409,7 @@ def compute_expansion(
     excluded: Set[int],
     scarcity: Dict[str, float],
     strategy_weight: float = 1.0,
+    params: ScoringParams = DEFAULT_PARAMS,
 ) -> Tuple[float, int]:
     """
     How good are the spots you could expand to with two roads?
@@ -373,7 +419,7 @@ def compute_expansion(
     distance rule forbids anyway). Only open targets — not already occupied
     or blocked — count.
 
-    Returns (sum of weighted pips of the best EXPANSION_TOP_N targets,
+    Returns (sum of weighted pips of the best params.expansion_top_n targets,
              their unweighted pip total for display).
     """
     neighbours = set(intersection.adjacent_ids)
@@ -386,14 +432,14 @@ def compute_expansion(
     scored = sorted(
         (
             (
-                compute_weighted_pip(imap[t].hex_ids, hmap, scarcity, strategy_weight),
+                compute_weighted_pip(imap[t].hex_ids, hmap, scarcity, strategy_weight, params),
                 compute_pip_total(imap[t].hex_ids, hmap),
             )
             for t in two_away
             if t not in excluded
         ),
         reverse=True,
-    )[:EXPANSION_TOP_N]
+    )[:params.expansion_top_n]
 
     return (
         round(sum(w for w, _ in scored), 3),
@@ -501,6 +547,7 @@ def explain(
     is_pair: bool = False,
     robber_loss: Optional[float] = None,
     expansion_pips: Optional[int] = None,
+    params: ScoringParams = DEFAULT_PARAMS,
 ) -> str:
     """
     Generate a short context-aware explanation for a recommendation.
@@ -545,7 +592,8 @@ def explain(
 
     # ── Sentence 2: synergy or diversity ────────────────────────────────────
     # Only name a pair that genuinely works (both sides produce meaningfully)
-    pair = strongest_synergy(expected_resources) if strategy_weight > 0.5 and synergy_bonus > 1.15 else None
+    pair = (strongest_synergy(expected_resources, params)
+            if strategy_weight > 0.5 and synergy_bonus >= SYNERGY_SENTENCE_MIN_BONUS else None)
     if pair:
         parts.append(SYNERGY_SENTENCES.get(frozenset(pair), "Strong resource complementarity."))
     elif diversity >= 3:

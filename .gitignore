@@ -2,6 +2,10 @@
 backend/.venv/
 backend/__pycache__/
 backend/*.pyc
+__pycache__/
+
+# Calibration run output (datasets, plots); the report itself is committed
+backend/calibration/output/
 
 # macOS
 .DS_Store

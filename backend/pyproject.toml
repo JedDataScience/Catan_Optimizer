@@ -8,6 +8,12 @@ dependencies = [
 ]
 
 [dependency-groups]
+calibration = [
+    "matplotlib>=3.11.2",
+    "numpy>=2.4.6",
+    "pandas>=3.0.6",
+    "statsmodels>=0.15.0",
+]
 dev = [
     "httpx2>=2.16.0",
     "pytest>=9.1.1",

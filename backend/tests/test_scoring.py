@@ -8,6 +8,7 @@ import pytest
 
 from board import DEFAULT_PORT_TYPES, PIP_VALUES, PORT_SLOTS, Hex
 from scorer import (
+    SYNERGY_PAIRS,
     compute_combined_stats,
     compute_expansion,
     compute_pip_total,
@@ -32,9 +33,11 @@ def test_lone_two_or_twelve_barely_triggers_synergy():
     full = _hexes(("fields", 8), ("mountains", 6))    # wheat 5 pips, ore 5 pips
     weak_bonus = compute_synergy_bonus([0, 1], weak, strategy_weight=1.0)
     full_bonus = compute_synergy_bonus([0, 1], full, strategy_weight=1.0)
-    assert full_bonus == pytest.approx(1.40)          # Ore + Wheat at full strength
-    assert weak_bonus == pytest.approx(1 + 0.4 * 1 / 5)  # 1 pip of 5 → a fifth of the bonus
-    assert weak_bonus < full_bonus
+    # Read the multiplier from the table so the test survives recalibration
+    mult = next(m for a, b, m in SYNERGY_PAIRS if {a, b} == {"mountains", "fields"})
+    assert full_bonus == pytest.approx(mult, abs=1e-3)                  # full strength
+    assert weak_bonus == pytest.approx(1 + (mult - 1) * 1 / 5, abs=1e-3)  # 1 pip of 5 → a fifth
+    assert 1.0 < weak_bonus < full_bonus
 
 
 def test_explanation_only_names_pairs_that_work():

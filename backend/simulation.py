@@ -32,8 +32,8 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from board import PORT_SLOTS, Hex, Intersection
 from scorer import (
-    PORT_WEIGHT,
-    SCORE_WEIGHTS,
+    DEFAULT_PARAMS,
+    ScoringParams,
     compute_board_scarcity,
     compute_diversity,
     compute_diversity_quality,
@@ -111,6 +111,7 @@ def compute_pair_value(
     hmap: Dict[int, Hex],
     scarcity: Dict[str, float],
     strategy_weight: float,
+    params: ScoringParams = DEFAULT_PARAMS,
 ) -> float:
     """
     Value of a settlement pair: weighted pips × synergy bonus. Pass an empty
@@ -119,8 +120,8 @@ def compute_pair_value(
     """
     combined = s1_hex_ids + s2_hex_ids
     return (
-        compute_weighted_pip(combined, hmap, scarcity, strategy_weight)
-        * compute_synergy_bonus(combined, hmap, strategy_weight)
+        compute_weighted_pip(combined, hmap, scarcity, strategy_weight, params)
+        * compute_synergy_bonus(combined, hmap, strategy_weight, params)
     )
 
 
@@ -233,6 +234,7 @@ def compute_follow_up(
     scarcity: Dict[str, float],
     strategy_weight: float,
     sampler: OpponentSampler,
+    params: ScoringParams = DEFAULT_PARAMS,
 ) -> Dict[int, Tuple[float, float]]:
     """
     For each S1 candidate C, estimate what the user's best S2 will be after
@@ -260,7 +262,7 @@ def compute_follow_up(
         options = sorted(
             (
                 (
-                    compute_pair_value(c.hex_ids, s.hex_ids, hmap, scarcity, strategy_weight),
+                    compute_pair_value(c.hex_ids, s.hex_ids, hmap, scarcity, strategy_weight, params),
                     compute_pip_total(s.hex_ids, hmap),
                     s.id,
                 )
@@ -313,10 +315,15 @@ def recommend(
     port_types: List[str],            # port type per slot in board.PORT_SLOTS
     n_simulations: int = 5000,
     strategy_weight: float = 1.0,     # 0.0 = raw production, 1.0 = win-path
+    params: ScoringParams = DEFAULT_PARAMS,  # scoring values (calibration swaps these)
 ) -> List[dict]:
     """
     Recommend the top 5 intersections for the user's next settlement.
     Assumes the request was validated (schemas.RecommendRequest).
+
+    `params` only changes how the *user's* options are valued. The simulated
+    opponents always use the default model, so comparing two sets of params
+    compares the user's choices against identical opponents.
     """
     hmap = {h.id: h for h in hexes}
     imap = {i.id: i for i in intersections}
@@ -356,7 +363,7 @@ def recommend(
         sampler = OpponentSampler(intersections, hmap, scarcity)
         follow_up = compute_follow_up(
             candidates, intersections, hmap, known_exclusion,
-            window_players, known_firsts, n_simulations, scarcity, strategy_weight, sampler,
+            window_players, known_firsts, n_simulations, scarcity, strategy_weight, sampler, params,
         )
 
     # Static components per candidate
@@ -365,16 +372,16 @@ def recommend(
         # For S2, score the pair. Not deduplicated — a shared hex pays out twice.
         hex_ids = s1_hex_ids + c.hex_ids if is_pair else c.hex_ids
         expansion, expansion_pips = compute_expansion(
-            c, imap, hmap, known_exclusion, scarcity, strategy_weight,
+            c, imap, hmap, known_exclusion, scarcity, strategy_weight, params,
         )
         row = {
             "intersection_id": c.id,
-            "wpip":           compute_weighted_pip(hex_ids, hmap, scarcity, strategy_weight),
-            "dq":             compute_diversity_quality(hex_ids, hmap, strategy_weight),
-            "syn":            compute_synergy_bonus(hex_ids, hmap, strategy_weight),
+            "wpip":           compute_weighted_pip(hex_ids, hmap, scarcity, strategy_weight, params),
+            "dq":             compute_diversity_quality(hex_ids, hmap, strategy_weight, params),
+            "syn":            compute_synergy_bonus(hex_ids, hmap, strategy_weight, params),
             "expansion":      expansion,
             "expansion_pips": expansion_pips,
-            "port_boost":     compute_port_boost(c.id, ports, strategy_weight),
+            "port_boost":     compute_port_boost(c.id, ports, strategy_weight, params),
             # Unweighted values for the UI
             "pip_total":      compute_pip_total(hex_ids, hmap),
             "diversity":      compute_diversity(hex_ids, hmap),
@@ -388,14 +395,14 @@ def recommend(
     component_keys = {"pip": "wpip", "diversity": "dq", "synergy": "syn", "expansion": "expansion"}
     if use_follow_up:
         component_keys["follow_up"] = "follow_up"
-    weight_sum = sum(SCORE_WEIGHTS[k] for k in component_keys)
-    weights    = {k: SCORE_WEIGHTS[k] / weight_sum for k in component_keys}
+    weight_sum = sum(params.score_weights[k] for k in component_keys)
+    weights    = {k: params.score_weights[k] / weight_sum for k in component_keys}
 
     # Z-score every component across candidates, then take the weighted sum
     z      = {k: standardise([r[field] for r in rows]) for k, field in component_keys.items()}
     z_port = standardise([r["port_boost"] for r in rows])
 
-    port_w = PORT_WEIGHT * strategy_weight   # port awareness only matters in win-path mode
+    port_w = params.port_weight * strategy_weight   # port awareness only matters in win-path mode
     for i, r in enumerate(rows):
         r["_raw_score"] = (
             (1.0 - port_w) * sum(weights[k] * z[k][i] for k in weights)
@@ -441,6 +448,7 @@ def recommend(
                 scarcity=scarcity,
                 is_pair=is_pair,
                 expansion_pips=r["expansion_pips"],
+                params=params,
             ),
         })
 

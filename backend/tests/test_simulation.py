@@ -132,3 +132,28 @@ def test_ranking_output_is_consistent(hexes, intersections, hmap):
     for r in recs:
         exp = compute_expected_resources(intersections[r["intersection_id"]].hex_ids, hmap)
         assert r["cards_per_roll"] == pytest.approx(sum(exp.values()), abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Swappable scoring values (used by the calibration tooling)
+# ---------------------------------------------------------------------------
+
+def test_default_params_change_nothing(hexes, intersections):
+    from scorer import DEFAULT_PARAMS
+    random.seed(5)
+    implicit = _recommend(hexes, intersections)
+    random.seed(5)
+    explicit = _recommend(hexes, intersections, params=DEFAULT_PARAMS)
+    assert implicit == explicit
+
+
+def test_params_actually_change_rankings(hexes, intersections):
+    from scorer import ScoringParams
+    # Making ore worthless should change which spots rank highest
+    no_ore = ScoringParams(strategic_value={"fields": 1.35, "mountains": 0.0, "pasture": 1.1,
+                                            "forest": 0.9, "hills": 0.9, "desert": 0.0})
+    random.seed(5)
+    default = [r["intersection_id"] for r in _recommend(hexes, intersections)]
+    random.seed(5)
+    changed = [r["intersection_id"] for r in _recommend(hexes, intersections, params=no_ore)]
+    assert default != changed

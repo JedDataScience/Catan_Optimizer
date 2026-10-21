@@ -83,6 +83,18 @@ cd frontend && npm test && npm run lint
 
 The Python and JavaScript board geometry are both checked against `shared/board_geometry.json`, so intersection ids can't drift apart. After an intentional geometry change, regenerate it with `uv run python -m scripts.export_geometry` from `backend/`.
 
+## Scoring calibration
+
+The scoring values in `backend/scorer.py` (resource values, pair bonuses, component weights) are fitted from simulated games, not hand-picked. `backend/calibration/` simulates full games (production, robber, building, bank/port and simple player trades, dev cards) from thousands of random starting positions, fits logistic regressions on who wins, and then checks the new values head-to-head on held-out boards. Results and methods are in [backend/calibration/REPORT.md](backend/calibration/REPORT.md).
+
+To re-run it (about 5 minutes; add `--quick` for a short smoke run):
+
+```bash
+cd backend && uv run --group calibration python -m calibration.run
+```
+
+The run writes a report and `calibration/output/params.json`; it never changes the app's values by itself.
+
 ## API endpoints
 
 | Method | Path              | Description                                   |
