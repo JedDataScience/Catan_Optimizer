@@ -12,8 +12,9 @@ export function getBoardIssues(hexes) {
 
   const noResource = hexes.filter((h) => !h.resource).length;
   const noNumber   = hexes.filter((h) => h.resource && h.resource !== 'desert' && !h.number).length;
-  if (noResource > 0) issues.push(`${noResource} hex${noResource > 1 ? 'es' : ''} need a resource type`);
-  if (noNumber   > 0) issues.push(`${noNumber} hex${noNumber > 1 ? 'es' : ''} need a number token`);
+  // "tiles" matches the wording used everywhere else in the app
+  if (noResource > 0) issues.push(`${noResource} ${noResource > 1 ? 'tiles need' : 'tile needs'} terrain`);
+  if (noNumber   > 0) issues.push(`${noNumber} ${noNumber > 1 ? 'tiles need' : 'tile needs'} a number`);
 
   // Only check counts once every hex has a resource, so a half-built board
   // isn't flooded with warnings
@@ -21,7 +22,7 @@ export function getBoardIssues(hexes) {
     for (const [res, expected] of Object.entries(RESOURCE_COUNTS)) {
       const actual = hexes.filter((h) => h.resource === res).length;
       if (actual !== expected) {
-        issues.push(`Need exactly ${expected} ${RESOURCE_MAP[res].label} hex${expected > 1 ? 'es' : ''} (have ${actual})`);
+        issues.push(`Use exactly ${expected} ${RESOURCE_MAP[res].label} tile${expected > 1 ? 's' : ''} (you have ${actual})`);
       }
     }
   }

@@ -273,6 +273,11 @@ button { font: inherit; color: inherit; }
 .choice:hover { border-color: var(--hairline-2); background: var(--paper-2); }
 /* Soft fill rather than solid ink, so terrain icons keep their contrast */
 .choice.is-active { border-color: var(--ink); background: var(--gold-soft); color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.choice:disabled { opacity: 0.4; cursor: not-allowed; }
+.choice:disabled:hover { border-color: var(--hairline); background: var(--paper); }
+.choice-sub { font-size: 11px; font-weight: 500; color: var(--ink-3); }
+.choice.is-active .choice-sub { color: var(--ink-2); }
+
 .choice-big {
   font-family: var(--font-display);
   font-size: var(--t-lg);

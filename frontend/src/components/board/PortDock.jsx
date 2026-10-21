@@ -67,6 +67,7 @@ export function PortDocks({ ports, editable, onSelect }) {
               if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(); }
             } : undefined}
             tabIndex={editable ? 0 : undefined}
+            data-port-slot={idx}
             role={editable ? 'button' : 'img'}
             aria-label={editable ? `${label} (change type)` : label}
           >

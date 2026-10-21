@@ -50,14 +50,17 @@ export default function SnakeDraftPanel({ state, dispatch, onRetry, onUndo, high
           : `Click the spot on the board where ${PLAYER_NAMES[currentPlayer]} built.`}
       </p>
 
+      {/* A section of its own, so the settings below get the normal divider and spacing */}
       {!isUserTurn && (
-        <div className="turn-note">
-          <span className="player-dot" style={{ background: PLAYER_COLORS[currentPlayer] }} />
-          <div>
-            <div className="turn-note-title">Pick {draftStep + 1} of {draftOrder.length}</div>
-            <div className="turn-note-body">Open spots are shown as white dots. Faint dots are too close to another settlement.</div>
+        <section className="section">
+          <div className="turn-note">
+            <span className="player-dot" style={{ background: PLAYER_COLORS[currentPlayer] }} />
+            <div>
+              <div className="turn-note-title">Pick {draftStep + 1} of {draftOrder.length}</div>
+              <div className="turn-note-body">Open spots are shown as white dots. Faint dots are too close to another settlement.</div>
+            </div>
           </div>
-        </div>
+        </section>
       )}
 
       {isUserTurn && (

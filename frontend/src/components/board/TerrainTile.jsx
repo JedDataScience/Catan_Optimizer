@@ -68,6 +68,7 @@ export default function TerrainTile({ hex, editable, selected, onActivate, dropD
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(hex, null); }
       } : undefined}
       tabIndex={editable ? 0 : undefined}
+      data-tile-id={hex.id}
       role={editable ? 'button' : undefined}
       aria-label={editable ? `${label} (edit)` : label}
     >

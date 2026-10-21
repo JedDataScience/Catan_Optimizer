@@ -47,7 +47,7 @@ describe('getBoardIssues', () => {
     expect(issues.some((i) => i.includes('Brick'))).toBe(true);
   });
 
-  it('only asks for missing hexes on a partial board', () => {
-    expect(getBoardIssues(buildHexGrid())).toEqual(['19 hexes need a resource type']);
+  it('only asks for missing tiles on a partial board', () => {
+    expect(getBoardIssues(buildHexGrid())).toEqual(['19 tiles need terrain']);
   });
 });

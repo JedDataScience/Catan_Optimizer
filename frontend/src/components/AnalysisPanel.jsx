@@ -83,7 +83,9 @@ export default function AnalysisPanel({ analysis, onRestart }) {
       <section className="section">
         <span className="field-label">Cards per roll by resource</span>
         <div className="chart-box">
-          <ResponsiveContainer width="100%" height="100%">
+          {/* A starting size lets the chart draw on the first frame instead of
+              waiting for a measurement (avoids a blank chart and size warnings) */}
+          <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 360, height: 150 }}>
             <BarChart data={chartData} margin={{ top: 6, right: 4, bottom: 6, left: -18 }}>
               <XAxis dataKey="name" tick={<GlyphTick />} axisLine={false} tickLine={false} interval={0} height={30} />
               <YAxis
@@ -93,7 +95,7 @@ export default function AnalysisPanel({ analysis, onRestart }) {
                 tickFormatter={(v) => v.toFixed(2)}
               />
               <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(23,59,58,0.05)' }} />
-              <Bar dataKey="value" radius={[6, 6, 0, 0]} maxBarSize={44}>
+              <Bar dataKey="value" radius={[6, 6, 0, 0]} maxBarSize={44} animationDuration={400}>
                 {chartData.map((entry) => (
                   <Cell key={entry.name} fill={RESOURCE_MAP[entry.name].top} stroke={RESOURCE_MAP[entry.name].slab} />
                 ))}
