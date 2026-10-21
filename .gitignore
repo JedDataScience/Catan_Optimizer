@@ -1,0 +1,7 @@
+# Python virtual environment
+backend/.venv/
+backend/__pycache__/
+backend/*.pyc
+
+# macOS
+.DS_Store
