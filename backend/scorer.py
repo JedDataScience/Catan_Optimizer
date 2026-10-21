@@ -12,7 +12,7 @@ SCORING MODEL (v2):
   final_score =
       pip_weight         * norm_weighted_pip
     + diversity_weight   * norm_diversity_quality   ← quality-weighted diversity, not flat count
-    + availability_weight * norm_availability        ← fraction of sims spot was unblocked
+    + follow_up_weight   * norm_follow_up            ← best S2 still open after opponents (S1 only)
     + synergy_weight     * norm_synergy_bonus        ← pair complementarity (S2 only)
     - robber_penalty     * norm_robber_risk           ← from robber.py (static)
 
@@ -75,7 +75,7 @@ SYNERGY_PAIRS = [
 SCORE_WEIGHTS = {
     "pip":          0.45,   # weighted pip total (resource + scarcity adjusted)
     "diversity":    0.20,   # quality-weighted diversity
-    "availability": 0.20,   # Monte Carlo availability (fraction unblocked)
+    "follow_up":    0.20,   # Monte Carlo: value of best S2 still open (S1 only)
     "synergy":      0.15,   # resource pair complementarity
 }
 
@@ -321,9 +321,11 @@ def compute_combined_stats(
     s2_hex_ids: List[int],
     hmap: Dict[int, Hex],
 ):
-    all_unique_ids = list(set(s1_hex_ids + s2_hex_ids))
-    pip_total = compute_pip_total(all_unique_ids, hmap)
-    diversity = compute_diversity(all_unique_ids, hmap)
+    # Not deduplicated: a hex touched by both settlements pays out twice.
+    # (Diversity counts distinct resource types, so duplicates don't affect it.)
+    all_ids = s1_hex_ids + s2_hex_ids
+    pip_total = compute_pip_total(all_ids, hmap)
+    diversity = compute_diversity(all_ids, hmap)
     expected  = compute_combined_expected_resources(s1_hex_ids, s2_hex_ids, hmap)
     return pip_total, diversity, expected
 
@@ -356,7 +358,8 @@ def score_candidates(
     rows = []
     for c in candidates:
         if s1_hex_ids:
-            combined_ids = list(set(s1_hex_ids + c.hex_ids))
+            # Not deduplicated: a hex touched by both settlements pays out twice
+            combined_ids = s1_hex_ids + c.hex_ids
             wpip   = compute_weighted_pip(combined_ids, hmap, scarcity, strategy_weight)
             dq     = compute_diversity_quality(combined_ids, hmap, strategy_weight)
             syn    = compute_synergy_bonus(combined_ids, hmap, strategy_weight)

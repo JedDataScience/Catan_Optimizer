@@ -44,7 +44,8 @@ export default function ExplanationPanel({ recommendations = [], onSelectNode, h
       {recommendations.map((rec) => {
         const color       = RANK_COLORS[rec.rank - 1] || RANK_COLORS[4];
         const isHighlight = rec.intersection_id === highlightedId;
-        const avail       = rec.availability != null ? Math.round(rec.availability * 100) : null;
+        // Expected pips of the best 2nd settlement still open (only sent for S1)
+        const followUp    = rec.follow_up_pips != null ? rec.follow_up_pips : null;
         const scoreDisp   = (rec.score * 100).toFixed(0);
 
         return (
@@ -71,9 +72,9 @@ export default function ExplanationPanel({ recommendations = [], onSelectNode, h
                 <span className="rank-stat">
                   <strong>{rec.diversity}</strong>&nbsp;types
                 </span>
-                {avail != null && (
-                  <span className="rank-stat">
-                    <strong>{avail}%</strong>&nbsp;open
+                {followUp != null && (
+                  <span className="rank-stat" title="Expected pips of the best 2nd settlement still open on your next turn">
+                    2nd spot&nbsp;<strong>{followUp}</strong>&nbsp;pips
                   </span>
                 )}
               </div>

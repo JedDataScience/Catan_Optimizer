@@ -1,29 +1,32 @@
 """
-simulation.py — Monte Carlo recommendation engine (v2).
+simulation.py — Monte Carlo recommendation engine (v3).
 
-Improvements over v1:
-  - Smart opponent placement: opponents weighted toward high-pip intersections
-    (proportional sampling with temperature parameter) instead of uniform random.
-  - Weighted pip scoring: uses scorer.compute_weighted_pip() with board-scarcity
-    and strategic resource multipliers instead of flat pip sums.
-  - Synergy scoring: pair complementarity bonus applied per candidate.
-  - strategy_weight parameter (0.0 → raw, 1.0 → win-path) propagated through.
-  - Port proximity awareness: bonus for intersections adjacent to port tiles.
+How a candidate spot C is scored for the user's next settlement:
+  - Static components (same every simulation, so computed once):
+      weighted pip, diversity quality, synergy, port proximity.
+  - Follow-up (S1 only, Monte Carlo): the user takes C *now*, so C itself
+    can never be blocked. What can be blocked is the user's second
+    settlement. Each simulation takes C, places only the opponent picks that
+    happen between now and the user's next turn (pip-weighted sampling), and
+    records the best S2 pair still open. follow_up = mean of that value.
+  - When placing S2 (the user's last pick) nothing comes after it, so the
+    follow-up term is dropped and its weight is spread over the rest.
+
+Shared hexes: if S1 and S2 touch the same hex, that hex pays out for both
+settlements, so combined hex lists are NOT deduplicated when summing pips.
 
 Sync note: get_exclusion_zone() in this file and getExclusionZone() in
 frontend/src/utils/intersectionMap.js must remain logically identical
 (occupied ids + all their immediate neighbours).
 """
 
+import bisect
 import random
-from collections import defaultdict
-from typing import List, Optional, Set, Dict
+from itertools import accumulate
+from typing import List, Optional, Set, Dict, Tuple
 
-from board import Hex, Intersection, PIP_VALUES
+from board import Hex, Intersection
 from scorer import (
-    score_candidates,
-    rank_candidates,
-    compute_combined_stats,
     compute_pip_total,
     compute_diversity,
     compute_weighted_pip,
@@ -79,59 +82,68 @@ def get_valid_intersections(intersections: List[Intersection], excluded: Set[int
 
 
 # ---------------------------------------------------------------------------
-# Smart opponent placement (v2)
+# Smart opponent placement
 # ---------------------------------------------------------------------------
 
-def place_smart_opponent(
-    valid: List[Intersection],
-    excluded: Set[int],
-    hmap: Dict[int, Hex],
-    temperature: float = 1.5,
-) -> Optional[int]:
+# After this many blocked draws in a row, stop rejection sampling and pick
+# directly from the open spots (only happens when the board is nearly full).
+_MAX_REJECTIONS = 50
+
+
+class OpponentSampler:
     """
-    Place a simulated opponent settlement using pip-weighted sampling.
+    Places simulated opponent settlements using pip-weighted sampling.
 
-    Opponents are modelled as "reasonably smart" — they prefer higher-pip
-    intersections but don't always take the absolute best spot (temperature
-    controls rationality: higher = greedier, 0 = uniform random).
+    Opponents are modelled as "reasonably smart": a spot's chance of being
+    picked is proportional to pip_total ** temperature (higher = greedier,
+    0 = uniform random). temperature=1.5 means good spots are ~2-3x more
+    likely to be taken than average ones (casual-to-intermediate play).
 
-    temperature=1.5 means good spots are ~2-3x more likely to be taken than
-    average spots, which reflects casual-to-intermediate player behaviour.
+    Uses rejection sampling: draw from the fixed board-wide weights and
+    redraw if the spot is blocked. That gives exactly the same distribution
+    as re-weighting only the open spots, but each draw is a fast binary
+    search instead of rebuilding a 54-item weight list — this runs millions
+    of times per request.
+
+    Assumes intersections[i].id == i (true for build_intersection_map).
     """
-    choices = [i for i in valid if i.id not in excluded]
-    if not choices:
-        return None
 
-    if temperature == 0.0:
-        chosen = random.choice(choices)
-    else:
-        weights = []
-        for intersection in choices:
-            pip = sum(
-                PIP_VALUES.get(hmap[hid].number, 0)
-                for hid in intersection.hex_ids
-                if hid in hmap and hmap[hid].number
-            )
-            # Raise to temperature power so high-pip spots get disproportionate weight
-            weights.append(max(pip, 0.1) ** temperature)
+    def __init__(self, intersections: List[Intersection], hmap: Dict[int, Hex], temperature: float = 1.5):
+        self.intersections = intersections
+        self.weights = [
+            max(compute_pip_total(i.hex_ids, hmap), 0.1) ** temperature
+            for i in intersections
+        ]
+        # Running total of weights: a uniform draw in [0, total) lands in
+        # spot i's slice with probability weight_i / total.
+        self.cum_weights = list(accumulate(self.weights))
+        self.total = self.cum_weights[-1]
 
-        chosen = random.choices(choices, weights=weights, k=1)[0]
+    def place(self, excluded: Set[int]) -> Optional[int]:
+        """Pick one open spot, add it + its neighbours to `excluded`, return its id."""
+        last = len(self.cum_weights) - 1
+        for _ in range(_MAX_REJECTIONS):
+            idx = min(bisect.bisect_right(self.cum_weights, random.random() * self.total), last)
+            if idx not in excluded:
+                break
+        else:
+            # Board nearly full: sample explicitly from what's left
+            open_ids = [i.id for i in self.intersections if i.id not in excluded]
+            if not open_ids:
+                return None
+            idx = random.choices(open_ids, weights=[self.weights[i] for i in open_ids], k=1)[0]
 
-    excluded.add(chosen.id)
-    excluded.update(chosen.adjacent_ids)
-    return chosen.id
+        chosen = self.intersections[idx]
+        excluded.add(chosen.id)
+        excluded.update(chosen.adjacent_ids)
+        return chosen.id
 
 
 # ---------------------------------------------------------------------------
 # Port proximity scoring
 # ---------------------------------------------------------------------------
 
-# Standard Catan port positions: each port is defined by which intersection IDs
-# it touches and what resource it offers (or "any" for 3:1).
-# These are fixed for the standard board layout computed by board.py.
-# Port awareness boosts intersections near high-value ports.
-
-# Port types: resource → strategic boost for being adjacent
+# Port types: resource → strategic boost for a settlement on that port
 PORT_STRATEGIC_BOOST = {
     "mountains": 0.12,   # 2:1 ore port — strong with ore strategy
     "fields":    0.12,   # 2:1 wheat port
@@ -141,57 +153,128 @@ PORT_STRATEGIC_BOOST = {
     "any":       0.04,   # 3:1 generic port
 }
 
-# Standard board port definitions: (intersection_ids_touching_port, resource)
-# Derived from standard Catan board geometry (pointy-top, 3-4-5-4-3 layout).
-# These IDs correspond to the intersection numbering produced by board.py.
+# Standard 9-port frame: 4 generic 3:1 ports + one 2:1 port per resource.
+# Each port sits on one coastal edge, i.e. two adjacent intersections on the
+# same outer hex. Positions follow the standard spacing around the board's
+# 30 coastal edges (gaps of 3, 3, 4 edges, repeated). Which resource sits on
+# which port is a placeholder: real boards shuffle port types.
+# IDs match board.py's numbering; test_fixes.py verifies the geometry.
 _STANDARD_PORT_INTERSECTIONS = [
-    # Top coast
-    ([0, 1],     "any"),
-    ([2, 3],     "mountains"),
-    # Upper-right coast
-    ([4, 10],    "fields"),
-    ([11, 18],   "any"),
-    # Lower-right coast
-    ([25, 33],   "hills"),
-    ([34, 40],   "any"),
-    # Bottom coast
-    ([41, 46],   "forest"),
-    ([47, 50],   "any"),
-    # Lower-left coast
-    ([51, 53],   "pasture"),
-    ([43, 48],   "any"),
-    # Upper-left coast
-    ([22, 29],   "any"),
-    ([6, 14],    "any"),
+    ([8, 9],   "any"),        # top
+    ([10, 13], "fields"),     # upper right
+    ([22, 37], "mountains"),  # right
+    ([45, 46], "any"),        # lower right
+    ([50, 53], "hills"),      # bottom
+    ([47, 48], "any"),        # lower left
+    ([26, 40], "forest"),     # left, lower
+    ([16, 28], "pasture"),    # left, upper
+    ([2, 3],   "any"),        # upper left
 ]
 
 
-def compute_port_proximity_boost(
-    intersection_id: int,
-    intersections: List[Intersection],
-    strategy_weight: float = 1.0,
-) -> float:
+def compute_port_proximity_boost(intersection_id: int, strategy_weight: float = 1.0) -> float:
     """
-    Return a small boost [0.0..0.12] if this intersection is adjacent to
-    a valuable port. Scales with strategy_weight.
+    Return a small boost [0.0..0.12] if a settlement here can trade through a
+    port. Only the port's own two intersections can use it. Scales with
+    strategy_weight.
     """
     if strategy_weight == 0.0:
         return 0.0
 
-    imap = {i.id: i for i in intersections}
-    node = imap.get(intersection_id)
-    if not node:
-        return 0.0
-
-    nearby_ids = {intersection_id} | set(node.adjacent_ids)
     best_boost = 0.0
-
     for port_ids, port_resource in _STANDARD_PORT_INTERSECTIONS:
-        if any(pid in nearby_ids for pid in port_ids):
-            boost = PORT_STRATEGIC_BOOST.get(port_resource, 0.0)
-            best_boost = max(best_boost, boost)
+        if intersection_id in port_ids:
+            best_boost = max(best_boost, PORT_STRATEGIC_BOOST.get(port_resource, 0.0))
 
     return round(best_boost * strategy_weight, 4)
+
+
+# ---------------------------------------------------------------------------
+# Follow-up (S1 only): how good a second settlement will still be open?
+# ---------------------------------------------------------------------------
+
+def compute_pair_value(
+    s1_hex_ids: List[int],
+    s2_hex_ids: List[int],
+    hmap: Dict[int, Hex],
+    scarcity: Dict[str, float],
+    strategy_weight: float,
+) -> float:
+    """
+    Value of a two-settlement pair: weighted pips × synergy bonus.
+    Hex lists are concatenated, not deduplicated — a shared hex pays out twice.
+    """
+    combined = s1_hex_ids + s2_hex_ids
+    return (
+        compute_weighted_pip(combined, hmap, scarcity, strategy_weight)
+        * compute_synergy_bonus(combined, hmap, strategy_weight)
+    )
+
+
+def compute_follow_up(
+    candidates: List[Intersection],
+    intersections: List[Intersection],
+    hmap: Dict[int, Hex],
+    known_exclusion: Set[int],
+    n_opponents: int,
+    n_simulations: int,
+    scarcity: Dict[str, float],
+    strategy_weight: float,
+    sampler: OpponentSampler,
+) -> Dict[int, Tuple[float, float]]:
+    """
+    For each S1 candidate C, estimate what the user's best S2 will be after
+    the `n_opponents` picks that happen before the user's next turn.
+
+    Returns {candidate_id: (avg best pair value, avg pips of that S2 spot)}.
+    """
+    # With no opponents in between, nothing is random: one pass is exact
+    if n_opponents == 0:
+        n_simulations = 1
+
+    open_now = get_valid_intersections(intersections, known_exclusion)
+    results: Dict[int, Tuple[float, float]] = {}
+
+    for c in candidates:
+        c_zone = {c.id} | set(c.adjacent_ids)
+
+        # Every S2 the user could pair with C, best first, so each simulation
+        # can stop at the first option that is still open
+        options = sorted(
+            (
+                (
+                    compute_pair_value(c.hex_ids, s.hex_ids, hmap, scarcity, strategy_weight),
+                    compute_pip_total(s.hex_ids, hmap),
+                    s.id,
+                )
+                for s in open_now
+                if s.id not in c_zone
+            ),
+            reverse=True,
+        )
+        if not options:
+            results[c.id] = (0.0, 0.0)
+            continue
+
+        base_excl = known_exclusion | c_zone
+        total_value = 0.0
+        total_pips  = 0.0
+
+        for _ in range(n_simulations):
+            excl = set(base_excl)
+            for _ in range(n_opponents):
+                if sampler.place(excl) is None:
+                    break
+            # Best remaining S2 (adds nothing if every option got blocked)
+            for value, pips, sid in options:
+                if sid not in excl:
+                    total_value += value
+                    total_pips  += pips
+                    break
+
+        results[c.id] = (total_value / n_simulations, total_pips / n_simulations)
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -210,10 +293,10 @@ def recommend(
     strategy_weight: float = 1.0,     # 0.0 = raw production, 1.0 = win-path
 ) -> List[dict]:
     """
-    Run a batch Monte Carlo to recommend the top 5 intersections for the
-    user's next settlement placement.
+    Recommend the top 5 intersections for the user's next settlement.
 
-    Uses smart (pip-weighted) opponent sampling and strategy-aware scoring.
+    Uses smart (pip-weighted) opponent sampling for the S1 follow-up term
+    and strategy-aware scoring for everything else.
     """
     hmap = {h.id: h for h in hexes}
     imap = {i.id: i for i in intersections}
@@ -221,117 +304,79 @@ def recommend(
     # Precompute board-level scarcity for weighted pip scoring
     scarcity = compute_board_scarcity(hexes)
 
-    # Build the snake draft order
     snake_draft = build_snake_draft(num_players)
 
-    # IDs already occupied
+    # Spots already blocked by placed settlements (distance rule)
     known_occupied  = [p["intersection_id"] for p in placed_settlements]
     known_exclusion = get_exclusion_zone(known_occupied, intersections)
 
-    # Determine future opponent draft steps
-    future_steps          = list(range(draft_step + 1, len(snake_draft)))
-    future_opponent_steps = [s for s in future_steps if snake_draft[s] != user_position]
-
-    # For S2 scoring: pre-fetch S1's hex_ids
+    # For S2 scoring: S1's hex_ids
     s1_hex_ids = imap[s1_id].hex_ids if s1_id is not None and s1_id in imap else None
 
-    # Accumulate scores across simulations
-    sim_wpip:   Dict[int, List[float]] = defaultdict(list)
-    sim_dq:     Dict[int, List[float]] = defaultdict(list)
-    sim_syn:    Dict[int, List[float]] = defaultdict(list)
-    sim_counts: Dict[int, int]         = defaultdict(int)
-
-    for _ in range(n_simulations):
-        excl = set(known_exclusion)
-
-        # Place future opponents using smart (pip-weighted) sampling
-        for _ in future_opponent_steps:
-            place_smart_opponent(intersections, excl, hmap, temperature=1.5)
-
-        candidates = get_valid_intersections(intersections, excl)
-        if not candidates:
-            continue
-
-        for c in candidates:
-            if s1_hex_ids is not None:
-                combined = list(set(s1_hex_ids + c.hex_ids))
-            else:
-                combined = c.hex_ids
-
-            wpip = compute_weighted_pip(combined, hmap, scarcity, strategy_weight)
-            dq   = compute_diversity_quality(combined, hmap, strategy_weight)
-            syn  = compute_synergy_bonus(combined, hmap, strategy_weight)
-
-            sim_wpip[c.id].append(wpip)
-            sim_dq[c.id].append(dq)
-            sim_syn[c.id].append(syn)
-            sim_counts[c.id] += 1
-
-    if not sim_wpip:
-        # Fallback: deterministic scoring
-        candidates = get_valid_intersections(intersections, known_exclusion)
-        scored = score_candidates(candidates, hmap, s1_hex_ids, scarcity, strategy_weight)
-        return rank_candidates(scored)
-
-    # Aggregate: mean per candidate
-    all_stats = []
-    for cid, wpip_samples in sim_wpip.items():
-        avg_wpip = sum(wpip_samples) / len(wpip_samples)
-        avg_dq   = sum(sim_dq[cid])  / len(sim_dq[cid])
-        avg_syn  = sum(sim_syn[cid]) / len(sim_syn[cid])
-        avail    = sim_counts[cid] / n_simulations
-
-        c = imap[cid]
-        port_boost = compute_port_proximity_boost(cid, intersections, strategy_weight)
-
-        # Display pip and diversity (unweighted, for UI)
-        if s1_hex_ids is not None:
-            combined_ids = list(set(s1_hex_ids + c.hex_ids))
-            pip_display  = compute_pip_total(combined_ids, hmap)
-            div_display  = compute_diversity(combined_ids, hmap)
-        else:
-            pip_display = compute_pip_total(c.hex_ids, hmap)
-            div_display = compute_diversity(c.hex_ids, hmap)
-
-        all_stats.append({
-            "intersection_id":   cid,
-            "avg_wpip":          avg_wpip,
-            "avg_dq":            avg_dq,
-            "avg_syn":           avg_syn,
-            "availability":      round(avail, 3),
-            "port_boost":        port_boost,
-            "pip_total":         pip_display,
-            "diversity":         div_display,
-            "_raw_score":        None,
-        })
-
-    if not all_stats:
+    candidates = get_valid_intersections(intersections, known_exclusion)
+    if not candidates:
         return []
 
-    # Normalise all components
-    norm_wpip  = normalise([r["avg_wpip"]      for r in all_stats])
-    norm_dq    = normalise([r["avg_dq"]        for r in all_stats])
-    norm_syn   = normalise([r["avg_syn"]       for r in all_stats])
-    norm_avail = normalise([r["availability"]  for r in all_stats])
-    norm_port  = normalise([r["port_boost"]    for r in all_stats])
+    # Follow-up only applies when placing S1 and the user has a later pick
+    next_user_step = next(
+        (s for s in range(draft_step + 1, len(snake_draft)) if snake_draft[s] == user_position),
+        None,
+    )
+    use_follow_up = s1_id is None and next_user_step is not None
+
+    follow_up: Dict[int, Tuple[float, float]] = {}
+    if use_follow_up:
+        # Every pick strictly between now and the user's next turn is an opponent's
+        n_opponents = next_user_step - draft_step - 1
+        sampler = OpponentSampler(intersections, hmap, temperature=1.5)
+        follow_up = compute_follow_up(
+            candidates, intersections, hmap, known_exclusion,
+            n_opponents, n_simulations, scarcity, strategy_weight, sampler,
+        )
+
+    # Static components per candidate
+    rows = []
+    for c in candidates:
+        # For S2, score the pair. Not deduplicated — a shared hex pays out twice.
+        hex_ids = s1_hex_ids + c.hex_ids if s1_hex_ids is not None else c.hex_ids
+        row = {
+            "intersection_id": c.id,
+            "wpip":       compute_weighted_pip(hex_ids, hmap, scarcity, strategy_weight),
+            "dq":         compute_diversity_quality(hex_ids, hmap, strategy_weight),
+            "syn":        compute_synergy_bonus(hex_ids, hmap, strategy_weight),
+            "port_boost": compute_port_proximity_boost(c.id, strategy_weight),
+            # Unweighted values for the UI
+            "pip_total":  compute_pip_total(hex_ids, hmap),
+            "diversity":  compute_diversity(hex_ids, hmap),
+        }
+        if use_follow_up:
+            row["follow_up"], row["follow_up_pips"] = follow_up[c.id]
+        rows.append(row)
+
+    # Component weights. Without a follow-up term (S2), rescale the rest so
+    # they still sum to 1.
+    component_keys = {"pip": "wpip", "diversity": "dq", "synergy": "syn"}
+    if use_follow_up:
+        component_keys["follow_up"] = "follow_up"
+    weight_sum = sum(SCORE_WEIGHTS[k] for k in component_keys)
+    weights    = {k: SCORE_WEIGHTS[k] / weight_sum for k in component_keys}
+
+    # Normalise every component to [0, 1] across candidates before combining
+    norm      = {k: normalise([r[field] for r in rows]) for k, field in component_keys.items()}
+    norm_port = normalise([r["port_boost"] for r in rows])
 
     port_w = 0.05 * strategy_weight   # port awareness only matters in win-path mode
     rem    = 1.0 - port_w             # remaining weight split among main components
 
-    for i, r in enumerate(all_stats):
+    for i, r in enumerate(rows):
         r["_raw_score"] = (
-            rem * (
-                SCORE_WEIGHTS["pip"]          * norm_wpip[i]   +
-                SCORE_WEIGHTS["diversity"]    * norm_dq[i]     +
-                SCORE_WEIGHTS["availability"] * norm_avail[i]  +
-                SCORE_WEIGHTS["synergy"]      * norm_syn[i]
-            )
+            rem * sum(weights[k] * norm[k][i] for k in weights)
             + port_w * norm_port[i]
         )
 
     # Sort and take top 5
-    all_stats.sort(key=lambda r: r["_raw_score"], reverse=True)
-    top = all_stats[:5]
+    rows.sort(key=lambda r: r["_raw_score"], reverse=True)
+    top = rows[:5]
 
     # Enrich with full details for the response
     result = []
@@ -349,17 +394,18 @@ def recommend(
             "score":             round(r["_raw_score"], 4),
             "pip_total":         r["pip_total"],
             "diversity":         r["diversity"],
-            "availability":      r["availability"],
-            "weighted_pip":      round(r["avg_wpip"], 2),
-            "synergy_bonus":     round(r["avg_syn"], 3),
+            # Expected pips of the best S2 still open (S1 only; None for S2)
+            "follow_up_pips":    round(r["follow_up_pips"], 1) if use_follow_up else None,
+            "weighted_pip":      round(r["wpip"], 2),
+            "synergy_bonus":     round(r["syn"], 3),
             "port_boost":        r["port_boost"],
             "expected_resources": exp_res,
             "explanation": explain(
                 pip_total=r["pip_total"],
                 diversity=r["diversity"],
                 expected_resources=exp_res,
-                weighted_pip=r["avg_wpip"],
-                synergy_bonus=r["avg_syn"],
+                weighted_pip=r["wpip"],
+                synergy_bonus=r["syn"],
                 strategy_weight=strategy_weight,
                 scarcity=scarcity,
             ),
