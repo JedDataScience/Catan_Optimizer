@@ -78,6 +78,20 @@ SYNERGY_PAIRS = [
     ("hills",     "fields",  1.05),   # Brick + Wheat = settlements
 ]
 
+# Explanation sentence per pair (see explain)
+SYNERGY_SENTENCES = {
+    frozenset({"mountains", "fields"}):  "Ore and Wheat together enable the city engine — the strongest late-game strategy.",
+    frozenset({"mountains", "pasture"}): "Ore and Sheep pair well for development cards and army control.",
+    frozenset({"fields", "pasture"}):    "Wheat and Sheep support a development card strategy.",
+    frozenset({"forest", "hills"}):      "Wood and Brick fuel early road and settlement expansion.",
+    frozenset({"forest", "fields"}):     "Wood and Wheat cover most of what a new settlement needs.",
+    frozenset({"hills", "fields"}):      "Brick and Wheat cover most of what a new settlement needs.",
+}
+
+# A pair's bonus is at full strength once its weaker resource has this many
+# pips (one 6 or 8); below that it scales down linearly (see synergy_strength)
+SYNERGY_FULL_PIPS = 5
+
 # ---------------------------------------------------------------------------
 # Canonical scoring weights — single source of truth
 # ---------------------------------------------------------------------------
@@ -255,25 +269,64 @@ def compute_diversity_quality(
 # Synergy bonus
 # ---------------------------------------------------------------------------
 
+def _pips_per_resource(hex_ids: List[int], hmap: Dict[int, Hex]) -> Dict[str, int]:
+    """Pips of each resource over these hexes (a repeated hex counts again)."""
+    pips: Dict[str, int] = {}
+    for hid in hex_ids:
+        h = hmap.get(hid)
+        if h and h.number and h.resource and h.resource != "desert":
+            pips[h.resource] = pips.get(h.resource, 0) + PIP_VALUES[h.number]
+    return pips
+
+
+def synergy_strength(pips_a: float, pips_b: float) -> float:
+    """
+    How fully a resource pair "works" [0..1]: limited by the weaker side.
+
+    A pair needs real production of both resources: a single 2 or 12 (1 pip)
+    of ore doesn't make an ore-and-wheat city engine. Strength grows linearly
+    with the weaker side's pips and is full at SYNERGY_FULL_PIPS (one 6 or 8).
+    """
+    return min(min(pips_a, pips_b) / SYNERGY_FULL_PIPS, 1.0)
+
+
 def compute_synergy_bonus(
     hex_ids: List[int],
     hmap: Dict[int, Hex],
     strategy_weight: float = 1.0,
 ) -> float:
     """
-    Compute a synergy multiplier (≥ 1.0) based on resource pair complementarity.
+    Compute a synergy multiplier (≥ 1.0) based on resource pair complementarity,
+    scaled by how much of each resource in the pair is actually produced.
     Only meaningful when strategy_weight > 0.
     """
     if strategy_weight == 0.0:
         return 1.0
 
-    present = _resources_present(hex_ids, hmap)
+    pips = _pips_per_resource(hex_ids, hmap)
     bonus = 1.0
     for r_a, r_b, mult in SYNERGY_PAIRS:
-        if r_a in present and r_b in present:
-            # Blend: at strategy_weight=1 get full mult, at 0 get 1.0
-            bonus *= 1.0 + strategy_weight * (mult - 1.0)
+        if r_a in pips and r_b in pips:
+            strength = synergy_strength(pips[r_a], pips[r_b])
+            # Blend: full multiplier at strategy_weight=1 and full strength
+            bonus *= 1.0 + strategy_weight * strength * (mult - 1.0)
     return round(bonus, 4)
+
+
+def strongest_synergy(expected_resources: Dict[str, float]) -> Optional[Tuple[str, str]]:
+    """
+    The pair contributing the most bonus, given expected cards per roll per
+    resource (pips = cards × 36). None if no pair reaches half strength, so
+    explanations only mention pairs that genuinely work.
+    """
+    best, best_gain = None, 0.0
+    for r_a, r_b, mult in SYNERGY_PAIRS:
+        if r_a in expected_resources and r_b in expected_resources:
+            strength = synergy_strength(expected_resources[r_a] * 36, expected_resources[r_b] * 36)
+            gain = strength * (mult - 1.0)
+            if strength >= 0.5 and gain > best_gain:
+                best, best_gain = (r_a, r_b), gain
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -491,18 +544,10 @@ def explain(
     parts.append(base + ".")
 
     # ── Sentence 2: synergy or diversity ────────────────────────────────────
-    if strategy_weight > 0.5 and synergy_bonus > 1.15:
-        present = set(expected_resources.keys())
-        if "mountains" in present and "fields" in present:
-            parts.append("Ore and Wheat together enable the city engine — the strongest late-game strategy.")
-        elif "mountains" in present and "pasture" in present:
-            parts.append("Ore and Sheep pair well for development cards and army control.")
-        elif "fields" in present and "pasture" in present:
-            parts.append("Wheat and Sheep support a development card strategy.")
-        elif "forest" in present and "hills" in present:
-            parts.append("Wood and Brick fuel early road and settlement expansion.")
-        else:
-            parts.append("Strong resource complementarity.")
+    # Only name a pair that genuinely works (both sides produce meaningfully)
+    pair = strongest_synergy(expected_resources) if strategy_weight > 0.5 and synergy_bonus > 1.15 else None
+    if pair:
+        parts.append(SYNERGY_SENTENCES.get(frozenset(pair), "Strong resource complementarity."))
     elif diversity >= 3:
         parts.append(f"Covers {diversity} distinct resource types — good flexibility to adapt your strategy.")
     elif diversity == 2:

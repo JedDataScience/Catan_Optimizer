@@ -6,15 +6,42 @@ import statistics
 
 import pytest
 
-from board import DEFAULT_PORT_TYPES, PIP_VALUES, PORT_SLOTS
+from board import DEFAULT_PORT_TYPES, PIP_VALUES, PORT_SLOTS, Hex
 from scorer import (
     compute_combined_stats,
     compute_expansion,
     compute_pip_total,
     compute_port_boost,
+    compute_synergy_bonus,
     explain,
     standardise,
 )
+
+
+# ---------------------------------------------------------------------------
+# Synergy: a pair only counts in proportion to its weaker side
+# ---------------------------------------------------------------------------
+
+def _hexes(*specs):
+    """hmap from (resource, number) pairs, ids 0..n-1."""
+    return {i: Hex(id=i, resource=r, number=n) for i, (r, n) in enumerate(specs)}
+
+
+def test_lone_two_or_twelve_barely_triggers_synergy():
+    weak = _hexes(("fields", 8), ("mountains", 12))   # wheat 5 pips, ore 1 pip
+    full = _hexes(("fields", 8), ("mountains", 6))    # wheat 5 pips, ore 5 pips
+    weak_bonus = compute_synergy_bonus([0, 1], weak, strategy_weight=1.0)
+    full_bonus = compute_synergy_bonus([0, 1], full, strategy_weight=1.0)
+    assert full_bonus == pytest.approx(1.40)          # Ore + Wheat at full strength
+    assert weak_bonus == pytest.approx(1 + 0.4 * 1 / 5)  # 1 pip of 5 → a fifth of the bonus
+    assert weak_bonus < full_bonus
+
+
+def test_explanation_only_names_pairs_that_work():
+    lone_ore  = {"fields": 5 / 36, "mountains": 1 / 36}
+    solid_ore = {"fields": 5 / 36, "mountains": 4 / 36}
+    assert "Ore and Wheat" not in explain(14, 2, lone_ore, weighted_pip=10, synergy_bonus=1.3)
+    assert "Ore and Wheat" in explain(14, 2, solid_ore, weighted_pip=10, synergy_bonus=1.3)
 
 
 # ---------------------------------------------------------------------------
