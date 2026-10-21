@@ -1,118 +1,100 @@
 /**
- * SnakeDraftPanel.jsx — Side panel for phase 3: the snake draft.
+ * SnakeDraftPanel.jsx — Step 3: the snake draft.
+ *
+ * On the user's turn: the ranked recommendations. On anyone else's turn: a
+ * note asking where they built. Settings sit below so they're at hand but
+ * don't compete with the recommendations.
  */
 
 import { buildDraftOrder } from '../../state/reducer';
-import { PLAYER_COLORS } from '../../utils/constants';
+import { PLAYER_COLORS, PLAYER_NAMES } from '../../utils/constants';
 import { StrategySlider, SimCountControl } from '../SettingsControls';
-import ExplanationPanel from '../ExplanationPanel';
-import ScarcityPanel from './ScarcityPanel';
+import RecommendationList from '../RecommendationList';
+
+function ErrorNotice({ message, onRetry }) {
+  return (
+    <div className="notice-error" role="alert">
+      {message}
+      <button className="btn btn-secondary btn-block" onClick={onRetry}>Try again</button>
+    </div>
+  );
+}
 
 export default function SnakeDraftPanel({ state, dispatch, onRetry, onUndo, highlightedId, setHighlightedId }) {
-  const { draftStep, numPlayers, userPosition, recommendations, isLoading, error, boardAnalysis, nSimulations, strategyWeight } = state;
+  const { draftStep, numPlayers, userPosition, recommendations, isLoading, error, nSimulations, strategyWeight } = state;
   const draftOrder = buildDraftOrder(numPlayers);
-  const finished   = draftStep >= draftOrder.length;
 
-  if (finished) {
+  if (draftStep >= draftOrder.length) {
     return (
       <div>
-        <div className="section-heading">Draft Complete</div>
-        {error ? (
-          <div className="error-box">
-            ⚠ {error}
-            <button className="btn btn-ghost btn-sm" style={{ marginTop: 6, width: '100%' }} onClick={onRetry}>
-              Retry
-            </button>
-          </div>
-        ) : (
-          <>
-            <div className="section-sub">Fetching your analysis…</div>
-            {isLoading && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-secondary)', fontSize: 13 }}>
-                <div className="spinner" /> Running analysis…
-              </div>
-            )}
-          </>
-        )}
+        <h1 className="panel-title">Draft complete</h1>
+        {error
+          ? <ErrorNotice message={error} onRetry={onRetry} />
+          : <div className="loading-line"><span className="spinner" /> Scoring your settlements…</div>}
       </div>
     );
   }
 
   const currentPlayer = draftOrder[draftStep];
   const isUserTurn    = currentPlayer === userPosition;
-  const settleNum     = draftStep < numPlayers ? 1 : 2;
-  const playerColor   = PLAYER_COLORS[currentPlayer];
+  const settlementNum = draftStep < numPlayers ? 1 : 2;
 
   return (
-    <>
-      <div className="optimizer-card" style={{ marginBottom: 12 }}>
-        <div className="optimizer-title">Settlement Optimizer</div>
+    <div>
+      <h1 className="panel-title">
+        {isUserTurn ? `Your turn: settlement ${settlementNum}` : `${PLAYER_NAMES[currentPlayer]} places settlement ${settlementNum}`}
+      </h1>
+      <p className="panel-intro">
+        {isUserTurn
+          ? 'Pick a numbered spot on the board, or any open spot if you prefer your own.'
+          : `Click the spot on the board where ${PLAYER_NAMES[currentPlayer]} built.`}
+      </p>
 
-        <ScarcityPanel boardAnalysis={boardAnalysis} title="Resource scarcity analysis" />
-
-        <div style={{ marginTop: 16 }}>
-          <div className="label-xs" style={{ marginBottom: 12 }}>Strategy</div>
-          <StrategySlider value={strategyWeight} onChange={(w) => dispatch({ type: 'SET_STRATEGY_WEIGHT', w })} />
-        </div>
-
-        <SimCountControl
-          value={nSimulations}
-          onChange={(n) => dispatch({ type: 'SET_N_SIMS', n })}
-          style={{ marginTop: 24 }}
-        />
-      </div>
-
-      {/* Undo */}
-      {state.placements.length > 0 && (
-        <button
-          className="btn btn-ghost btn-sm"
-          style={{ marginBottom: 10, width: '100%' }}
-          onClick={onUndo}
-        >
-          ↩ Undo Last Placement
-        </button>
-      )}
-
-      {/* Turn banner */}
       {!isUserTurn && (
-        <div className="turn-banner">
-          <div className="turn-banner-title" style={{ color: playerColor }}>
-            Player {currentPlayer + 1}'s Turn — Settlement {settleNum}
+        <div className="turn-note">
+          <span className="player-dot" style={{ background: PLAYER_COLORS[currentPlayer] }} />
+          <div>
+            <div className="turn-note-title">Pick {draftStep + 1} of {draftOrder.length}</div>
+            <div className="turn-note-body">Open spots are shown as white dots. Faint dots are too close to another settlement.</div>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
-            Click any valid intersection to set Player {currentPlayer + 1}'s placement.
-          </div>
         </div>
       )}
 
-      {/* Error */}
-      {isUserTurn && error && !isLoading && (
-        <div className="error-box">
-          ⚠ {error}
-          <button className="btn btn-ghost btn-sm" style={{ marginTop: 6, width: '100%' }} onClick={onRetry}>
-            Retry
-          </button>
-        </div>
+      {isUserTurn && (
+        <section className="section" aria-live="polite" aria-busy={isLoading}>
+          {isLoading && (
+            <div className="loading-line">
+              <span className="spinner" />
+              Running {nSimulations.toLocaleString()} simulations…
+            </div>
+          )}
+          {error && !isLoading && <ErrorNotice message={error} onRetry={onRetry} />}
+          {!isLoading && recommendations.length > 0 && (
+            <>
+              <span className="field-label">Best open spots</span>
+              <RecommendationList
+                key={recommendations.map((r) => r.intersection_id).join('-')}
+                recommendations={recommendations}
+                onHighlight={setHighlightedId}
+                highlightedId={highlightedId}
+              />
+            </>
+          )}
+        </section>
       )}
 
-      {/* Loading */}
-      {isLoading && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500 }}>
-          <div className="spinner" />
-          Running {nSimulations.toLocaleString()} simulations…
-        </div>
+      {state.placements.length > 0 && (
+        <section className="section">
+          <button className="btn btn-quiet" onClick={onUndo}>Undo last placement</button>
+        </section>
       )}
 
-      {/* Recommendations */}
-      {isUserTurn && recommendations.length > 0 && (
-        <div className="recommendations-list">
-          <ExplanationPanel
-            recommendations={recommendations}
-            onSelectNode={setHighlightedId}
-            highlightedId={highlightedId}
-          />
-        </div>
-      )}
-    </>
+      <section className="section">
+        <StrategySlider value={strategyWeight} onChange={(w) => dispatch({ type: 'SET_STRATEGY_WEIGHT', w })} />
+      </section>
+      <section className="section">
+        <SimCountControl value={nSimulations} onChange={(n) => dispatch({ type: 'SET_N_SIMS', n })} />
+      </section>
+    </div>
   );
 }

@@ -30,8 +30,9 @@ export const DEFAULT_PORT_TYPES = ['any', 'fields', 'mountains', 'any', 'hills',
 
 export const PORT_TYPE_OPTIONS = ['any', 'forest', 'hills', 'fields', 'pasture', 'mountains'];
 
-// How far (px) the port badge sits outside the coastline
-const MARKER_OFFSET = 24;
+// How far (SVG units) the port dock sits outside the coastline: long enough
+// for a short plank bridge from each coastal corner
+const MARKER_OFFSET = 36;
 
 /**
  * SVG position for a slot's badge: the midpoint of its edge, pushed outward

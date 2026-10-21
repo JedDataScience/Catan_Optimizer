@@ -23,6 +23,7 @@ export function makeInitialState() {
     phase:           PHASES.BOARD_SETUP,
     hexes:           buildHexGrid(),
     ports:           [...DEFAULT_PORT_TYPES], // port type per slot in PORT_SLOTS
+    boardVersion:    0,  // bumps on Randomise so the board replays its drop-in animation
     numPlayers:      4,
     userPosition:    0,
     nSimulations:    5000,
@@ -62,6 +63,7 @@ export function reducer(state, action) {
         ...state,
         hexes: state.hexes.map((h, i) => ({ ...h, ...action.patches[i] })),
         ports: action.ports,
+        boardVersion: state.boardVersion + 1,
         boardAnalysis: null,
       };
 

@@ -19,6 +19,7 @@ import AnalysisPanel from './components/AnalysisPanel';
 import BoardSetupPanel from './components/panels/BoardSetupPanel';
 import PlayerConfigPanel from './components/panels/PlayerConfigPanel';
 import SnakeDraftPanel from './components/panels/SnakeDraftPanel';
+import Steps from './components/panels/Steps';
 import { INTERSECTIONS, getExclusionZone } from './utils/intersectionMap';
 import { PHASES, buildDraftOrder, makeInitialState, reducer } from './state/reducer';
 import { fetchAnalysis, fetchRecommendations } from './api/client';
@@ -32,7 +33,7 @@ export default function App() {
   const [retryToken, setRetryToken]       = useState(0);
 
   const {
-    phase, hexes, ports, numPlayers, draftStep, userPosition, placements,
+    phase, hexes, ports, boardVersion, numPlayers, draftStep, userPosition, placements,
     userS1, userS2, nSimulations, strategyWeight, recommendations, analysis,
   } = state;
 
@@ -103,11 +104,11 @@ export default function App() {
     setHighlightedId(null);
   }
 
-  // Overlay visibility
+  // Overlay visibility: open spots are clickable on every turn, and on the
+  // user's turn the recommendation pins sit on top of them
   const showRecs         = inDraft && recommendations.length > 0;
-  const showAnyDots      = inDraft && currentPlayer !== null && !isUserTurn;
-  const showUserDot      = isUserTurn && !recommendations.length;
   const overlayClickable = inDraft && currentPlayer !== null;
+  const showOpenSpots    = overlayClickable;
 
   function renderSidePanel() {
     switch (phase) {
@@ -137,22 +138,16 @@ export default function App() {
     <div className="app-shell">
       {/* Header */}
       <header className="app-header">
-        <div className="app-logo">
-          <svg className="app-logo-hex" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <polygon points="16,2 27,8.5 27,23.5 16,30 5,23.5 5,8.5" fill="none" stroke="#000" strokeWidth="2" />
-            <polygon points="16,8 23,12 23,20 16,24 9,20 9,12" fill="#000" />
-            <circle cx="16" cy="16" r="1.5" fill="#fff" />
+        <div className="wordmark">
+          <svg viewBox="0 0 32 32" aria-hidden="true">
+            <polygon points="16,5 27,11 27,24 16,30 5,24 5,11" fill="#C9A42C" />
+            <polygon points="16,2 27,8 27,21 16,27 5,21 5,8" fill="#F3CF4A" stroke="#173B3A" strokeWidth="2" strokeLinejoin="round" />
           </svg>
-          <div className="app-title">
-            <span className="app-title-bold">CATAN</span><br/>
-            <span className="app-title-light">OPTIMIZER</span>
-          </div>
+          Catan Optimizer
         </div>
-
-        <nav className="top-nav">
-          <span className="nav-link active" aria-current="page">Dashboard</span>
-          <button className="nav-link" onClick={() => dispatch({ type: 'RESET' })}>New Simulation</button>
-        </nav>
+        <button className="btn btn-secondary btn-on-sea" onClick={() => dispatch({ type: 'RESET' })}>
+          New game
+        </button>
       </header>
 
       {/* Main */}
@@ -163,6 +158,7 @@ export default function App() {
             ports={ports}
             onHexUpdate={(id, patch) => dispatch({ type: 'UPDATE_HEX', hexId: id, patch })}
             onPortChange={(slot, portType) => dispatch({ type: 'SET_PORT_TYPE', slot, portType })}
+            dropKey={boardVersion}
             interactive={phase === PHASES.BOARD_SETUP}
           >
             {(inDraft || phase === PHASES.ANALYSIS) && (
@@ -174,16 +170,16 @@ export default function App() {
                 exclusionZone={exclusionZone}
                 onNodeClick={overlayClickable ? handleNodeClick : undefined}
                 highlightTop5={showRecs}
-                allowAnyClick={showAnyDots || showUserDot}
+                allowAnyClick={showOpenSpots}
+                highlightedId={highlightedId}
               />
             )}
           </BoardSetup>
         </div>
 
-        <aside className="side-panel">
-          <div className="side-panel-inner">
-            {renderSidePanel()}
-          </div>
+        <aside className="side-panel" aria-label="Steps and recommendations">
+          <Steps phase={phase} />
+          {renderSidePanel()}
         </aside>
       </div>
     </div>

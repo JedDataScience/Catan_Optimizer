@@ -1,10 +1,10 @@
 /**
- * PlayerConfigPanel.jsx — Side panel for phase 2: players, turn order, settings.
+ * PlayerConfigPanel.jsx — Step 2: players, turn order, and settings.
  */
 
 import { Fragment } from 'react';
 import { PHASES, buildDraftOrder } from '../../state/reducer';
-import { PLAYER_COLORS, PLAYER_LABELS } from '../../utils/constants';
+import { PLAYER_COLORS, PLAYER_LABELS, PLAYER_NAMES } from '../../utils/constants';
 import { StrategySlider, SimCountControl } from '../SettingsControls';
 import ScarcityPanel from './ScarcityPanel';
 
@@ -13,114 +13,97 @@ export default function PlayerConfigPanel({ state, dispatch }) {
 
   return (
     <div>
-      <div className="section-heading">Game Setup</div>
-      <div className="section-sub">
-        Configure players, turn order, and how the optimizer weights its recommendations.
-      </div>
+      <h1 className="panel-title">Players and turn order</h1>
+      <p className="panel-intro">
+        Recommendations are for you. Choose how many people are playing and
+        when you place your first settlement.
+      </p>
 
-      {/* Board scarcity (fetched when entering player config) */}
-      <ScarcityPanel boardAnalysis={state.boardAnalysis} />
+      {state.boardAnalysis && (
+        <section className="section">
+          <ScarcityPanel boardAnalysis={state.boardAnalysis} />
+        </section>
+      )}
 
-      {/* Number of players */}
-      <div style={{ marginBottom: 14 }}>
-        <div className="label-xs" style={{ marginBottom: 7 }}>Number of Players</div>
-        <div style={{ display: 'flex', gap: 7 }}>
+      <section className="section">
+        <span className="field-label" id="players-label">Players</span>
+        <div className="choice-grid" role="radiogroup" aria-labelledby="players-label" style={{ '--cols': 3 }}>
           {[2, 3, 4].map((n) => (
             <button
               key={n}
-              className={`position-btn ${state.numPlayers === n ? 'active' : ''}`}
-              style={{ flex: 1 }}
+              type="button"
+              role="radio"
+              aria-checked={state.numPlayers === n}
+              className={`choice${state.numPlayers === n ? ' is-active' : ''}`}
               onClick={() => dispatch({ type: 'SET_NUM_PLAYERS', n })}
             >
-              <span className="position-btn-num">{n}</span>
+              <span className="choice-big num">{n}</span>
               players
             </button>
           ))}
         </div>
-      </div>
+      </section>
 
-      {/* Turn position */}
-      <div style={{ marginBottom: 14 }}>
-        <div className="label-xs" style={{ marginBottom: 7 }}>Your Turn Position</div>
-        <div className="position-grid">
+      <section className="section">
+        <span className="field-label" id="turn-label">You place</span>
+        <div className="choice-grid" role="radiogroup" aria-labelledby="turn-label" style={{ '--cols': state.numPlayers }}>
           {Array.from({ length: state.numPlayers }, (_, pos) => (
             <button
               key={pos}
-              className={`position-btn ${state.userPosition === pos ? 'active' : ''}`}
+              type="button"
+              role="radio"
+              aria-checked={state.userPosition === pos}
+              className={`choice${state.userPosition === pos ? ' is-active' : ''}`}
               onClick={() => dispatch({ type: 'SET_USER_POSITION', position: pos })}
             >
-              <span className="position-btn-num" style={{ color: PLAYER_COLORS[pos] }}>{pos + 1}</span>
-              {PLAYER_LABELS[pos]}
+              <span className="choice-big">{PLAYER_LABELS[pos]}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span className="player-dot" style={{ background: PLAYER_COLORS[pos] }} />
+                {PLAYER_NAMES[pos]}
+              </span>
             </button>
           ))}
         </div>
-      </div>
 
-      {/* Simulations */}
-      <div style={{ marginBottom: 14 }}>
-        <div className="label-xs" style={{ marginBottom: 7 }}>Simulations</div>
-        <SimCountControl value={state.nSimulations} onChange={(n) => dispatch({ type: 'SET_N_SIMS', n })} />
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
-          More = better accuracy, slower. 5k recommended.
+        <span className="field-label" style={{ marginTop: 14 }}>Draft order</span>
+        <div className="draft-order" aria-label="Snake draft order">
+          {draftOrder.map((player, step) => (
+            <Fragment key={step}>
+              {step === state.numPlayers && <span className="draft-divider" aria-hidden="true" />}
+              <span
+                className={`draft-pip${player === state.userPosition ? ' is-user' : ''}`}
+                title={`Pick ${step + 1}: ${PLAYER_NAMES[player]}, settlement ${step < state.numPlayers ? 1 : 2}`}
+              >
+                {player + 1}
+              </span>
+            </Fragment>
+          ))}
         </div>
-      </div>
+        <p className="hint">Your picks are highlighted. First settlements are left of the line, second settlements right.</p>
+      </section>
 
-      {/* Strategy weight */}
-      <div style={{ marginBottom: 16 }}>
-        <div className="label-xs" style={{ marginBottom: 7 }}>Optimization Strategy</div>
+      <section className="section">
         <StrategySlider
           value={state.strategyWeight}
           onChange={(w) => dispatch({ type: 'SET_STRATEGY_WEIGHT', w })}
-          showDescription
+          showCaption
         />
-      </div>
+      </section>
 
-      {/* Draft preview */}
-      <div className="card" style={{ padding: '10px 14px', marginBottom: 14 }}>
-        <div className="label-xs" style={{ marginBottom: 7 }}>Draft Order Preview</div>
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-          {draftOrder.map((player, step) => {
-            const isUser   = player === state.userPosition;
-            const isPhase2 = step >= state.numPlayers;
-            return (
-              <Fragment key={step}>
-                {step === state.numPlayers && (
-                  <div style={{ width: 1, height: 24, background: 'var(--border-med)', margin: '0 3px' }} />
-                )}
-                <div
-                  style={{
-                    width: 26, height: 26, borderRadius: '50%',
-                    background: isUser ? PLAYER_COLORS[state.userPosition] + '22' : 'var(--bg-hover)',
-                    border: `2px solid ${isUser ? PLAYER_COLORS[state.userPosition] : 'var(--border-med)'}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 9, fontWeight: 700,
-                    color: isUser ? PLAYER_COLORS[state.userPosition] : 'var(--text-muted)',
-                  }}
-                  title={`Step ${step + 1}: P${player + 1} — Settlement ${isPhase2 ? 2 : 1}`}
-                >
-                  {player + 1}
-                </div>
-              </Fragment>
-            );
-          })}
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 7 }}>
-          Highlighted = your picks. Left of divider = S1, right = S2.
-        </div>
-      </div>
+      <section className="section">
+        <SimCountControl value={state.nSimulations} onChange={(n) => dispatch({ type: 'SET_N_SIMS', n })} showHint />
+      </section>
 
-      <div style={{ display: 'flex', gap: 7 }}>
-        <button className="btn btn-ghost" onClick={() => dispatch({ type: 'SET_PHASE', phase: PHASES.BOARD_SETUP })}>
-          ← Back
-        </button>
-        <button
-          className="btn btn-primary"
-          style={{ flex: 1 }}
-          onClick={() => dispatch({ type: 'SET_PHASE', phase: PHASES.SNAKE_DRAFT })}
-        >
-          Start Draft →
-        </button>
-      </div>
+      <section className="section">
+        <div className="btn-row">
+          <button className="btn btn-secondary" style={{ flex: '0 0 auto' }} onClick={() => dispatch({ type: 'SET_PHASE', phase: PHASES.BOARD_SETUP })}>
+            Back
+          </button>
+          <button className="btn btn-primary btn-lg" onClick={() => dispatch({ type: 'SET_PHASE', phase: PHASES.SNAKE_DRAFT })}>
+            Start draft
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

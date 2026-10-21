@@ -12,11 +12,13 @@
  *   Row r=2  (bottom 3): q = -2,-1,0
  */
 
-export const HEX_SIZE = 55;          // circumradius in pixels
-export const SVG_WIDTH  = 620;
-export const SVG_HEIGHT = 580;
-export const SVG_CX = SVG_WIDTH  / 2;  // 310
-export const SVG_CY = SVG_HEIGHT / 2;  // 290
+export const HEX_SIZE = 55;          // circumradius in SVG units
+// The viewBox leaves room around the island for the sea ring and port docks.
+// The SVG itself scales to fit its container, so these are units, not screen pixels.
+export const SVG_WIDTH  = 720;
+export const SVG_HEIGHT = 680;
+export const SVG_CX = SVG_WIDTH  / 2;  // 360
+export const SVG_CY = SVG_HEIGHT / 2;  // 340
 
 const SQRT3 = Math.sqrt(3);
 
