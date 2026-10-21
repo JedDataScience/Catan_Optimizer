@@ -5,6 +5,7 @@ Endpoints:
   POST /recommend      — Top 5 recommended intersections (strategy-aware)
   POST /analyze        — Final breakdown after the draft is complete
   POST /board-analysis — Board-level resource scarcity analysis
+  GET  /scoring-info   — The scoring values in use, and the evidence behind them
   GET  /health         — Startup check; verifies 54 intersections
 
 Requests are validated by the models in schemas.py; invalid input gets a
@@ -16,8 +17,10 @@ Environment variables:
 """
 
 import copy
+import json
 import os
-from typing import List, Tuple
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +29,9 @@ from board import Hex, Intersection, apply_board_state, build_hex_grid, build_in
 from robber import compute_robber_expected_loss
 from schemas import AnalyzeRequest, BoardAnalysisRequest, HexData, RecommendRequest
 from scorer import (
+    DEFAULT_PARAMS,
+    NON_DESERT,
+    ScoringParams,
     compute_board_analysis,
     compute_combined_stats,
     compute_expected_resources,
@@ -55,6 +61,38 @@ def _build_board(board: List[HexData]) -> Tuple[List[Hex], List[Intersection]]:
     """Fresh hexes with this request's resources/numbers, plus intersections."""
     hexes = apply_board_state(copy.deepcopy(_BASE_HEXES), [h.model_dump() for h in board])
     return hexes, build_intersection_map(hexes)
+
+
+# Written by the calibration run (backend/calibration/run.py)
+CALIBRATION_SUMMARY = Path(__file__).resolve().parent / "calibration" / "summary.json"
+
+
+def _shares(weights: dict) -> dict:
+    total = sum(weights.values()) or 1.0
+    return {k: round(v / total, 4) for k, v in weights.items()}
+
+
+def build_scoring_info(params: ScoringParams = DEFAULT_PARAMS,
+                       summary_path: Optional[Path] = CALIBRATION_SUMMARY) -> dict:
+    """
+    What the app scores spots on, in display-ready form. Weight shares are
+    rescaled exactly as recommend() does: a first settlement includes the
+    follow-up (second spot) term, a second settlement doesn't. The port
+    weight is a separate share of the whole score.
+    """
+    first = dict(params.score_weights)
+    second = {k: v for k, v in first.items() if k != "follow_up"}
+    summary = None
+    if summary_path is not None and summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+    return {
+        "resource_values": {r: params.strategic_value[r] for r in NON_DESERT},
+        "weights": {"first_settlement": _shares(first), "second_settlement": _shares(second)},
+        "port_weight": params.port_weight,
+        "scarcity_boost": params.scarcity_boost,
+        "pairs": [{"a": a, "b": b, "multiplier": m} for a, b, m in params.synergy_pairs],
+        "calibration": summary,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +191,12 @@ def board_analysis_endpoint(req: BoardAnalysisRequest):
     """
     hexes, _ = _build_board(req.board)
     return compute_board_analysis(hexes)
+
+
+@app.get("/scoring-info")
+def scoring_info_endpoint():
+    """The scoring values in use and, if available, the calibration evidence behind them."""
+    return build_scoring_info()
 
 
 @app.get("/health")

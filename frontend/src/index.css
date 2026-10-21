@@ -692,6 +692,144 @@ button { font: inherit; color: inherit; }
 
 .chart-box { height: 150px; margin-top: 4px; }
 
+/* ─── "How scoring works" panel ──────────────────────────────────────── */
+
+.header-actions { display: flex; gap: 8px; }
+.label-short { display: none; }
+
+/* Native <dialog> styled as a right-hand drawer */
+.info-dialog {
+  margin: 0 0 0 auto;
+  width: min(500px, 100vw);
+  height: 100vh;
+  max-height: 100vh;
+  max-width: 100vw;
+  border: none;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--lift);
+  overflow: hidden;
+}
+.info-dialog[open] { animation: drawerIn 0.22s ease both; }
+.info-dialog::backdrop { background: rgba(23, 59, 58, 0.35); }
+@keyframes drawerIn {
+  from { transform: translateX(24px); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+
+.info-panel {
+  height: 100%;
+  overflow-y: auto;
+  padding: 0 26px 32px;
+  scrollbar-width: thin;
+}
+.info-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 22px 0 14px;
+  margin-bottom: 4px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--hairline);
+}
+.info-header .panel-title { margin: 0; }
+.info-close { min-width: 40px; font-size: var(--t-md); }
+
+.info-heading {
+  font-family: var(--font-display);
+  font-size: var(--t-md);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.info-text { color: var(--ink-2); max-width: 60ch; margin-bottom: 12px; }
+.info-text:last-child { margin-bottom: 0; }
+
+/* Labelled horizontal bars */
+.bar-list { list-style: none; display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.bar-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(90px, 140px) 48px;
+  align-items: center;
+  gap: 12px;
+}
+.bar-text { display: flex; flex-direction: column; min-width: 0; }
+.bar-text-icon { flex-direction: row; align-items: center; gap: 8px; }
+.bar-label { font-weight: 600; }
+.bar-hint { font-size: var(--t-xs); color: var(--ink-3); line-height: 1.35; }
+.bar-track {
+  position: relative;
+  height: 10px;
+  border-radius: var(--r-pill);
+  background: var(--paper-2);
+}
+.bar-fill { height: 100%; border-radius: inherit; background: var(--ink); }
+.bar-value { text-align: right; font-family: var(--font-display); font-weight: 700; }
+
+/* Reference marks on the resource bars */
+.bar-average, .bar-previous {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 0;
+  transform: translateX(-1px);
+}
+.bar-average  { border-left: 2px dotted var(--ink); opacity: 0.55; }
+.bar-previous { border-left: 2px solid var(--ink); opacity: 0.35; }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: var(--t-xs);
+  color: var(--ink-3);
+  margin-bottom: 12px;
+}
+.legend-key { display: inline-block; width: 0; height: 12px; margin-right: -4px; }
+.legend-average  { border-left: 2px dotted var(--ink); opacity: 0.55; }
+.legend-previous { border-left: 2px solid var(--ink); opacity: 0.35; margin-left: 8px; }
+
+.pair-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.pair-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--paper-2);
+}
+.pair-list li span { flex: 1; margin-left: 4px; }
+.pair-list li strong { font-family: var(--font-display); }
+
+/* Method diagram */
+.method { margin: 6px 0 16px; }
+.method svg { display: block; width: 100%; height: auto; }
+.method-steps {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 6px;
+  font-size: var(--t-xs);
+  text-align: center;
+}
+.method-steps li { display: flex; flex-direction: column; gap: 2px; }
+.method-steps strong { font-weight: 700; }
+.method-steps span { color: var(--ink-2); line-height: 1.4; }
+
+.result-callout {
+  padding: 14px 16px;
+  border-radius: var(--r-control);
+  background: var(--gold-soft);
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+
 /* ─── Responsive ─────────────────────────────────────────────────────── */
 
 /* Narrow panel (below ~1300px the panel is under 440px): drop the detail
@@ -714,6 +852,11 @@ button { font: inherit; color: inherit; }
   .rank-detail { padding-left: 14px; }
   .steps { gap: 4px; }
   .step-label { display: none; }
+  .label-long { display: none; }
+  .label-short { display: inline; }
+  .info-panel { padding: 0 18px 28px; }
+  .bar-list li { grid-template-columns: minmax(0, 1fr) 80px 44px; gap: 8px; }
+  .method-steps { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {

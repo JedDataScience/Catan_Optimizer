@@ -123,3 +123,37 @@ def test_analyze_rejects_swapped_settlements():
     body = _analyze_body()
     body["s1_id"], body["s2_id"] = body["s2_id"], body["s1_id"]
     assert client.post("/analyze", json=body).status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Scoring info (the "How scoring works" panel)
+# ---------------------------------------------------------------------------
+
+def test_scoring_info_reports_the_values_in_use():
+    from scorer import DEFAULT_PARAMS
+    data = client.get("/scoring-info").json()
+    for r, v in data["resource_values"].items():
+        assert v == DEFAULT_PARAMS.strategic_value[r]
+    assert data["port_weight"] == DEFAULT_PARAMS.port_weight
+    assert len(data["pairs"]) == len(DEFAULT_PARAMS.synergy_pairs)
+
+
+def test_scoring_info_weights_are_shares():
+    w = client.get("/scoring-info").json()["weights"]
+    assert sum(w["first_settlement"].values()) == pytest.approx(1.0, abs=1e-3)
+    assert sum(w["second_settlement"].values()) == pytest.approx(1.0, abs=1e-3)
+    assert "follow_up" in w["first_settlement"]
+    assert "follow_up" not in w["second_settlement"]
+
+
+def test_scoring_info_without_calibration_summary(tmp_path):
+    from main import build_scoring_info
+    info = build_scoring_info(summary_path=tmp_path / "missing.json")
+    assert info["calibration"] is None
+    assert info["resource_values"]
+
+
+def test_scoring_info_includes_committed_summary():
+    cal = client.get("/scoring-info").json()["calibration"]
+    assert cal is not None
+    assert cal["ci_low"] <= cal["difference"] <= cal["ci_high"]

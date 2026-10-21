@@ -124,6 +124,39 @@ def main() -> None:
     plot_head_to_head(summary, OUT / "head_to_head.png")
     write_report(df, report, summary, by_seat, timings, cfg, args)
     print(f"[report] wrote {HERE / 'REPORT.md'}")
+    if not args.quick:
+        # The app's "How scoring works" panel reads this; quick runs are too small to publish
+        write_summary(df, summary, cfg)
+        print(f"[summary] wrote {SUMMARY_PATH}")
+
+
+SUMMARY_PATH = HERE / "summary.json"
+
+
+def build_summary(df: pd.DataFrame, summary: pd.DataFrame, cfg: dict, previous_params=DEFAULT_PARAMS) -> dict:
+    """
+    The headline numbers the app shows. `previous_params` are the values in
+    effect when the calibration ran (the ones it was compared against).
+    """
+    rate = summary.set_index("arm")
+    best = max((a for a in rate.index if a.startswith("calibrated")), key=lambda a: rate.loc[a, "win_rate"])
+    return {
+        "boards": int(df["board_id"].nunique()),
+        "games_simulated": int(df.groupby("board_id")["games"].first().sum()),
+        "heldout_boards": int(cfg["eval_boards"]),
+        "picker": best,
+        "win_rate_calibrated": round(float(rate.loc[best, "win_rate"]), 4),
+        "win_rate_previous": round(float(rate.loc["current", "win_rate"]), 4),
+        "difference": round(float(rate.loc[best, "diff_vs_current"]), 4),
+        "ci_low": round(float(rate.loc[best, "ci_low"]), 4),
+        "ci_high": round(float(rate.loc[best, "ci_high"]), 4),
+        "previous_values": {k: v for k, v in previous_params.strategic_value.items() if k != "desert"},
+        "generated": time.strftime("%Y-%m-%d"),
+    }
+
+
+def write_summary(df: pd.DataFrame, summary: pd.DataFrame, cfg: dict, previous_params=DEFAULT_PARAMS) -> None:
+    SUMMARY_PATH.write_text(json.dumps(build_summary(df, summary, cfg, previous_params), indent=2) + "\n")
 
 
 def write_report(df, report, summary, by_seat, timings, cfg, args) -> None:

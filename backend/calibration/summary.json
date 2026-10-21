@@ -1,0 +1,19 @@
+{
+  "boards": 3000,
+  "games_simulated": 60000,
+  "heldout_boards": 300,
+  "picker": "calibrated_fu0.3",
+  "win_rate_calibrated": 0.5576,
+  "win_rate_previous": 0.5199,
+  "difference": 0.0377,
+  "ci_low": 0.0251,
+  "ci_high": 0.0503,
+  "previous_values": {
+    "fields": 1.35,
+    "mountains": 1.25,
+    "pasture": 1.1,
+    "forest": 0.9,
+    "hills": 0.9
+  },
+  "generated": "2026-10-21"
+}

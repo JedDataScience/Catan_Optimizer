@@ -25,13 +25,13 @@ export function formatErrorDetail(detail) {
   return JSON.stringify(detail);
 }
 
-async function postJSON(path, body, { signal } = {}) {
+async function requestJSON(path, { method = 'GET', body, signal } = {}) {
   let resp;
   try {
     resp = await fetch(`${API_BASE}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      method,
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal,
     });
   } catch (e) {
@@ -51,6 +51,15 @@ async function postJSON(path, body, { signal } = {}) {
     throw new Error(message);
   }
   return resp.json();
+}
+
+function postJSON(path, body, { signal } = {}) {
+  return requestJSON(path, { method: 'POST', body, signal });
+}
+
+/** The scoring values in use and the evidence behind them (for the "How scoring works" panel). */
+export function fetchScoringInfo(signal) {
+  return requestJSON('/scoring-info', { signal });
 }
 
 function boardPayload(hexes) {

@@ -23,6 +23,7 @@ import Steps from './components/panels/Steps';
 import { INTERSECTIONS, getExclusionZone } from './utils/intersectionMap';
 import { PHASES, buildDraftOrder, makeInitialState, reducer } from './state/reducer';
 import { fetchAnalysis, fetchRecommendations } from './api/client';
+import ScoringInfo from './components/ScoringInfo';
 
 // Wait this long after the last settings change before refetching
 const REFETCH_DEBOUNCE_MS = 300;
@@ -145,9 +146,12 @@ export default function App() {
           </svg>
           Catan Optimizer
         </div>
-        <button className="btn btn-secondary btn-on-sea" onClick={() => dispatch({ type: 'RESET' })}>
-          New game
-        </button>
+        <div className="header-actions">
+          <ScoringInfo />
+          <button className="btn btn-secondary btn-on-sea" onClick={() => dispatch({ type: 'RESET' })}>
+            New game
+          </button>
+        </div>
       </header>
 
       {/* Main */}
