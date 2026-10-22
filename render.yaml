@@ -1,0 +1,27 @@
+# Render Blueprint: how Render builds and runs the backend.
+# Create it once from the Render dashboard (New → Blueprint → this repo);
+# after that Render redeploys on every push to main that changes backend/.
+# Reference: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: catan-optimizer-api       # also sets the URL: https://catan-optimizer-api.onrender.com
+    runtime: docker
+    plan: free                      # sleeps after 15 idle minutes; wakes on the next request
+    branch: main
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend         # the folder the Dockerfile's COPY lines read from
+    # Only rebuild when the backend (or this file) changes, not on frontend edits
+    buildFilter:
+      paths:
+        - backend/**
+        - render.yaml
+    # Render waits for this to answer before switching traffic to a new deploy
+    healthCheckPath: /health
+    # Deploy only after the GitHub checks on the commit pass (backend tests,
+    # frontend build), so a broken commit never goes live
+    autoDeployTrigger: checksPass
+    envVars:
+      # Browsers may only call the API from the GitHub Pages site
+      - key: CORS_ORIGINS
+        value: https://jeddatascience.github.io

@@ -111,6 +111,35 @@ cd backend && uv run --group benchmark --group calibration python -m benchmarks.
 
 The overall write-up of both the calibration and the benchmark is [ANALYSIS.md](ANALYSIS.md).
 
+## Deploying
+
+The frontend is hosted on **GitHub Pages** and the backend on **Render** (free Docker hosting).
+
+| Part | How it deploys |
+|---|---|
+| Frontend | `.github/workflows/deploy-frontend.yml` tests, lints and builds it on every push to `main` that changes `frontend/` or `shared/`, then publishes it to Pages |
+| Backend | Render builds `backend/Dockerfile` (settings in `render.yaml`) on every push to `main` that changes `backend/`, once the GitHub checks pass. `.github/workflows/backend-tests.yml` runs the backend tests that it waits for. |
+
+**One-time setup**
+
+1. In this repo's Settings → **Pages**, set Source to **GitHub Actions**.
+2. Push to `main`.
+3. On [Render](https://render.com), sign in with GitHub and choose **New → Blueprint**, then pick this repo. Render reads `render.yaml` and deploys the backend. Copy the service's URL, e.g. `https://catan-optimizer-api.onrender.com`.
+4. In this repo's Settings → **Secrets and variables → Actions → Variables**, add `VITE_API_URL` with that URL.
+5. Re-run **Deploy frontend** from the Actions tab. (Its first run fails on purpose until `VITE_API_URL` is set, rather than building a site that calls localhost.)
+
+The site is then at `https://jeddatascience.github.io/Catan_Optimizer/`. The backend only accepts browser requests from that origin (`CORS_ORIGINS` in `render.yaml`). A free Render service sleeps after 15 minutes without requests, so the first one after that takes about a minute while it wakes up.
+
+To try the container locally (it then works with the local frontend on port 5173):
+
+```bash
+docker build -t catan-backend backend
+```
+
+```bash
+docker run --rm -p 8000:8000 catan-backend
+```
+
 ## API endpoints
 
 | Method | Path              | Description                                   |

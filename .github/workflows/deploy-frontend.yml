@@ -1,0 +1,77 @@
+# Builds the React frontend and publishes it to GitHub Pages.
+#
+# One-time setup (repo Settings):
+#   Pages     → Source: "GitHub Actions"
+#   Variables → VITE_API_URL = the backend's URL, e.g. https://catan-optimizer-api.onrender.com
+
+name: Deploy frontend
+
+on:
+  push:
+    branches: [main]
+    # Only rebuild when something the frontend depends on changes
+    # (its tests also read shared/board_geometry.json)
+    paths:
+      - "frontend/**"
+      - "shared/**"
+      - ".github/workflows/deploy-frontend.yml"
+  workflow_dispatch: # allows a manual run from the Actions tab
+
+# Least privilege: read the code, write to Pages, and prove the job's identity to Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two deploys at once; let an in-progress one finish
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Without this the site would silently call http://localhost:8000
+      - name: Check the backend URL is set
+        run: |
+          if [ -z "${{ vars.VITE_API_URL }}" ]; then
+            echo "::error::Set the VITE_API_URL repository variable (Settings → Secrets and variables → Actions → Variables)"
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+
+      # Pages serves the site under /<repo-name>/, so asset paths need that prefix.
+      # Passing --base here keeps vite.config.js (and local dev) unchanged.
+      - name: Build
+        run: npm run build -- --base=/${{ github.event.repository.name }}/
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
