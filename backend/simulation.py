@@ -316,6 +316,8 @@ def recommend(
     n_simulations: int = 5000,
     strategy_weight: float = 1.0,     # 0.0 = raw production, 1.0 = win-path
     params: ScoringParams = DEFAULT_PARAMS,  # scoring values (calibration swaps these)
+    port_edges: Optional[List[Tuple[int, int]]] = None,  # default: board.PORT_SLOTS
+    opponent_temperature: float = OPPONENT_TEMPERATURE,
 ) -> List[dict]:
     """
     Recommend the top 5 intersections for the user's next settlement.
@@ -324,10 +326,17 @@ def recommend(
     `params` only changes how the *user's* options are valued. The simulated
     opponents always use the default model, so comparing two sets of params
     compares the user's choices against identical opponents.
+
+    `port_edges` lets other boards (e.g. the Catanatron benchmark, whose ports
+    sit on different coastal edges) say where their ports are; `port_types[i]`
+    is the type of `port_edges[i]`.
+
+    `opponent_temperature` is how greedy the simulated opponents in the
+    follow-up are (higher = more likely to take the best spots).
     """
     hmap = {h.id: h for h in hexes}
     imap = {i.id: i for i in intersections}
-    ports = list(zip(PORT_SLOTS, port_types))
+    ports = list(zip(PORT_SLOTS if port_edges is None else port_edges, port_types))
 
     # Precompute board-level scarcity for weighted pip scoring
     scarcity = compute_board_scarcity(hexes)
@@ -360,7 +369,7 @@ def recommend(
         known_firsts: Dict[int, int] = {}
         for p in placed_settlements:
             known_firsts.setdefault(p["player"], p["intersection_id"])
-        sampler = OpponentSampler(intersections, hmap, scarcity)
+        sampler = OpponentSampler(intersections, hmap, scarcity, temperature=opponent_temperature)
         follow_up = compute_follow_up(
             candidates, intersections, hmap, known_exclusion,
             window_players, known_firsts, n_simulations, scarcity, strategy_weight, sampler, params,

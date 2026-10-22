@@ -9,3 +9,6 @@ backend/calibration/output/
 
 # macOS
 .DS_Store
+
+# Catanatron benchmark raw results; the BENCHMARK.md summary is committed
+backend/benchmarks/catanatron/output/

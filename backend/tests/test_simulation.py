@@ -157,3 +157,28 @@ def test_params_actually_change_rankings(hexes, intersections):
     random.seed(5)
     changed = [r["intersection_id"] for r in _recommend(hexes, intersections, params=no_ore)]
     assert default != changed
+
+
+def test_custom_port_edges_move_the_port_bonus(hexes, intersections):
+    # One generic port on a coastal edge that isn't one of our standard slots
+    edge = (0, 1)
+    assert 1 in intersections[0].adjacent_ids
+    recs_default = recommend(hexes, intersections, [], 0, 4, 0, None, DEFAULT_PORT_TYPES, n_simulations=500)
+    recs_custom = recommend(hexes, intersections, [], 0, 4, 0, None, ["any"], n_simulations=500, port_edges=[edge])
+    boosted = {r["intersection_id"] for r in recs_custom if r["port_boost"] > 0}
+    assert boosted <= {0, 1}
+    assert all(r["port_boost"] == 0 or r["intersection_id"] in {0, 1} for r in recs_custom)
+    assert recs_default  # default call still works unchanged
+
+
+def test_greedier_opponents_lower_the_follow_up(hexes, intersections):
+    # Greedier simulated opponents take more of the best second spots, so the
+    # expected second-spot value can only stay the same or drop
+    def best_follow_up(temp):
+        random.seed(3)
+        recs = _recommend(hexes, intersections, n_simulations=800, opponent_temperature=temp)
+        return {r["intersection_id"]: r["follow_up_pips"] for r in recs}
+    casual, greedy = best_follow_up(1.5), best_follow_up(6.0)
+    shared = set(casual) & set(greedy)
+    assert shared
+    assert sum(greedy[i] for i in shared) < sum(casual[i] for i in shared)
