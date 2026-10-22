@@ -2,6 +2,8 @@
 
 A web app that recommends the best starting settlement placements in Catan. You set up a board (resources and number tokens on all 19 hexes, plus port types), pick the number of players and your turn order, and the backend ranks every open intersection, using Monte Carlo simulation to model what opponents will take before your next pick.
 
+**Does it work?** In 4,800 games in [Catanatron](https://github.com/bcollazo/catanatron), an independent Catan engine, a strong AI player that let the recommender choose its two starting settlements won **28.5%** of four-player games, against **23.9%** when it chose them itself (+4.6 points, 95% CI +1.4 to +7.8). The scoring values behind it were fitted from 60,000 simulated games. Full methodology and results: **[ANALYSIS.md](ANALYSIS.md)**.
+
 ## Features
 
 - Interactive board setup with port types, or a randomized board
@@ -33,6 +35,8 @@ backend/
   scorer.py       Scoring components and explanations
   robber.py       Robber placement and long-run robber model
   scripts/        export_geometry.py (writes the shared fixture)
+  calibration/    game simulator and scoring-value fitting (REPORT.md)
+  benchmarks/     Catanatron benchmark (BENCHMARK.md, SEAT0.md)
   tests/          pytest suite
 frontend/src/
   App.jsx         App shell and backend calls
@@ -94,6 +98,18 @@ cd backend && uv run --group calibration python -m calibration.run
 ```
 
 The run writes a report and `calibration/output/params.json`; it never changes the app's values by itself.
+
+## External benchmark (Catanatron)
+
+`backend/benchmarks/catanatron/` tests the recommender inside [Catanatron](https://github.com/bcollazo/catanatron), an independent Catan engine with strong AlphaBeta search bots. Its AlphaBeta player chooses its two starting settlements with our recommender (or a baseline), then plays the rest of the game unchanged. That's compared with the same player choosing for itself, on the same seeds. Results are in [BENCHMARK.md](backend/benchmarks/catanatron/BENCHMARK.md), with a follow-up on placing first in [SEAT0.md](backend/benchmarks/catanatron/SEAT0.md).
+
+To re-run it (about 20 minutes; add `--quick` for a one-minute check):
+
+```bash
+cd backend && uv run --group benchmark --group calibration python -m benchmarks.catanatron.run
+```
+
+The overall write-up of both the calibration and the benchmark is [ANALYSIS.md](ANALYSIS.md).
 
 ## API endpoints
 
